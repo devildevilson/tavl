@@ -10,7 +10,7 @@ likewise resumable, so a chunk that ends mid-token simply stalls and resumes on 
 
 ## The language
 
-The unit of structure is a **row**: `identifier operator data…`. A row begins with its first token
+The unit of structure is a **row**: `identifier operator data...`. A row begins with its first token
 and ends at a comma, a newline, or the end of its enclosing block. Rows live inside blocks:
 
 | Block | Brackets | Row parse mode |
@@ -25,8 +25,8 @@ The whole file is an implicit tuple. A block's mode can be overridden (see
 ### Data types
 
 `null`, `boolean` (`true`/`false`), integers (decimal, `0x` hex, `0o` octal, `0b` binary),
-floats (incl. `nan`/`inf`, `e` exponent, leading `.`), single-quoted strings `'…'` (multiline,
-minimal escaping), double-quoted strings `"…"` (standard escapes + `\u`/`\U` unicode, multiline),
+floats (incl. `nan`/`inf`, `e` exponent, leading `.`), single-quoted strings `'...'` (multiline,
+minimal escaping), double-quoted strings `"..."` (standard escapes + `\u`/`\U` unicode, multiline),
 ISO `datetime` (`T` or `_` between date and time, optional fraction and timezone), identifiers
 (`[A-Za-z_][A-Za-z0-9_.]*`), registered operators, and line `//` / block `/* */` comments.
 
@@ -90,7 +90,7 @@ p.flush("r = 255\ng = 128\nb = 0"); p.finish();
 tavl::deserialize(p, ctx, c);          // fills fields by name (or positionally)
 
 std::string out;
-tavl::serialize(c, out);               // mirror; options via tavl::serialize<sopts{…}>(c, out)
+tavl::serialize(c, out);               // mirror; options via tavl::serialize<sopts{...}>(c, out)
 ```
 
 `deserialize<T>` / `serialize<T>` handle primitives, `std::string`, `std::array<char,N>` buffers,
@@ -127,7 +127,7 @@ for (data d{}; tavl::deserialize_next(p, ctx, d); d = data{}) items.push_back(d)
 ```tavl
 a = 5, b = 6, c = 1 2 3            // one file → 1 instance
 
-(a = 4, b = 2, c = (4,5,6)),       // one file → N instances; each (…) is one record,
+(a = 4, b = 2, c = (4,5,6)),       // one file → N instances; each (...) is one record,
 (a = 0, b = 2, c = 7 8 9)          // commas/newlines between/inside records are interchangeable
 ```
 
