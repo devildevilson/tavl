@@ -10,6 +10,8 @@
 #include <set>
 #include <tuple>
 #include <utility>
+#include <memory>
+#include <chrono>
 
 #include "util.h"
 
@@ -158,15 +160,65 @@ TEST_CASE("serialize: large struct with all supported types (round-trip)") {
   check_mega(tavl_test::round_trip(p, make_mega()));
 }
 
-// serialize and deserialize mirror each other once the asymmetric-type flags are OFF:
+// ===== serialize / deserialize mirror each other with the asymmetric-type flags OFF =====
 // serialize_cstr=false disables std::string_view / const char* / char*, follow_pointers=false disables
-// raw pointers. Under these flags serialize emits ONLY what deserialize can read back, so a full
-// round-trip is lossless. (Those asymmetric types are rejected at compile time by the static_asserts
-// in serialize.h while the flags are off, so they cannot silently break the symmetry.)
-TEST_CASE("serialize/deserialize: mirror with string_view & pointer flags off") {
+// raw pointers. With both off, serialize emits ONLY what deserialize can read back, so a round-trip is
+// lossless. Those asymmetric types are rejected at compile time (static_asserts in serialize.h), so they
+// cannot silently break the mirror. Both flags default to off, so the default config IS the mirror.
+
+TEST_CASE("mirror (flags off): is the default for serialize_cstr/follow_pointers") {
+  constexpr tavl::sopts def{};
+  static_assert(!def.serialize_cstr, "serialize_cstr must default to false (mirror by default)");
+  static_assert(!def.follow_pointers, "follow_pointers must default to false (mirror by default)");
+
+  // default serialization == explicit-flags-off serialization
+  constexpr tavl::sopts off{ .serialize_cstr = false, .follow_pointers = false };
+  CHECK(tavl_test::to_text(make_mega()) == tavl_test::to_text<off>(make_mega()));
+}
+
+TEST_CASE("mirror (flags off): large struct round-trips losslessly") {
   tavl::parser p;
   p.add_default_operator();
 
   constexpr tavl::sopts off{ .serialize_cstr = false, .follow_pointers = false };
   check_mega(tavl_test::round_trip<off>(p, make_mega()));
+}
+
+TEST_CASE("mirror (flags off): chrono / optional / unique_ptr / nested containers") {
+  using namespace std::chrono;
+  tavl::parser p;
+  p.add_default_operator();
+
+  constexpr tavl::sopts off{ .serialize_cstr = false, .follow_pointers = false };
+
+  struct rec {
+    system_clock::time_point when;          // time_point -> ISO datetime
+    milliseconds dur;                       // duration   -> ISO datetime
+    std::optional<std::string> some;
+    std::optional<std::string> none;
+    std::unique_ptr<int> ptr;
+    std::vector<std::vector<int>> grid;     // nested sequences
+    std::map<std::string, int> tags;
+  };
+
+  rec src{};
+  src.when = system_clock::time_point{milliseconds{1718368205500}};
+  src.dur  = milliseconds{1500};
+  src.some = "hello world";                 // has a space -> must be quoted and read back
+  src.none = std::nullopt;
+  src.ptr  = std::make_unique<int>(42);
+  src.grid = {{1, 2}, {3, 4, 5}};
+  src.tags = {{"a", 1}, {"b", 2}};
+
+  const auto r = tavl_test::round_trip<off>(p, src);
+
+  CHECK(r.when == src.when);
+  CHECK(r.dur == src.dur);
+  REQUIRE(r.some.has_value());
+  CHECK(*r.some == "hello world");
+  CHECK_FALSE(r.none.has_value());
+  REQUIRE(r.ptr != nullptr);
+  CHECK(*r.ptr == 42);
+  CHECK(r.grid == src.grid);
+  CHECK(r.tags == src.tags);
 }
