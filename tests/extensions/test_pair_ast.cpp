@@ -9,31 +9,31 @@ static std::string pair_ast(tavl::parser& p, std::string_view src) {
   return tavl_test::ast_str(p, nodes);
 }
 
-TEST_CASE("pair_ast: одна пара") {
+TEST_CASE("pair_ast: a single pair") {
   tavl::parser p;
   p.add_default_operator();
   CHECK(pair_ast(p, "a = b") == "(pair '=' (tok 'a') (tok 'b'))");
 }
 
-TEST_CASE("pair_ast: правая ассоциативность (rhs = весь остаток)") {
+TEST_CASE("pair_ast: right-associativity (rhs = the entire remainder)") {
   tavl::parser p;
   p.add_default_operator();
   CHECK(pair_ast(p, "a = b = c") == "(pair '=' (tok 'a') (pair '=' (tok 'b') (tok 'c')))");
 }
 
-TEST_CASE("pair_ast: свободные операнды -> row") {
+TEST_CASE("pair_ast: free operands -> row") {
   tavl::parser p;
   p.add_default_operator();
   CHECK(pair_ast(p, "a b") == "(row 'a' (tok 'a') (tok 'b'))");
 }
 
-TEST_CASE("pair_ast: скобочная группа как операнд") {
+TEST_CASE("pair_ast: a bracket group as an operand") {
   tavl::parser p;
   p.add_default_operator();
   CHECK(pair_ast(p, "a = (b, c)") == "(pair '=' (tok 'a') (tuple '(' (tok 'b') (tok 'c')))");
 }
 
-TEST_CASE("pair_ast: количество детей через node_view") {
+TEST_CASE("pair_ast: child count via node_view") {
   tavl::parser p;
   p.add_default_operator();
   const auto nodes = tavl_test::build_ast(p, "a = (b, c)", tavl::make_pair_ast);
@@ -56,7 +56,7 @@ static void to_row_begin(tavl::parser& p, std::string_view src) {
   while (ev.type != tavl::event_type::row_begin && ev.type != tavl::event_type::eof);
 }
 
-TEST_CASE("pair_ast: bounded_output — упор в ast_nodes.capacity() даёт err_output_capacity (атомарно)") {
+TEST_CASE("pair_ast: bounded_output — hitting ast_nodes.capacity() yields err_output_capacity (atomically)") {
   tavl::parser p;
   p.add_default_operator();
   to_row_begin(p, "a = (b, c, d, e)");          // дерево из ~7 узлов
@@ -72,7 +72,7 @@ TEST_CASE("pair_ast: bounded_output — упор в ast_nodes.capacity() даё�
   CHECK(nodes.capacity() == cap);                // без реаллокации
 }
 
-TEST_CASE("pair_ast: bounded_output с достаточной capacity — без ошибки, дерево корректно") {
+TEST_CASE("pair_ast: bounded_output with sufficient capacity — no error, tree is correct") {
   tavl::parser p;
   p.add_default_operator();
   to_row_begin(p, "a = (b, c)");

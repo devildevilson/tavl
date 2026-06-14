@@ -28,7 +28,7 @@ struct buf  { std::array<char, 8> name; };   // char[8] нельзя: reflect п
 struct data { int a; int b; std::array<int, 3> c; };
 }
 
-TEST_CASE("deserialize: именованные поля примитивов") {
+TEST_CASE("deserialize: named fields of primitives") {
   tavl::parser p;
   p.add_default_operator();
   const auto v = tavl_test::deserialize_all<rgb>(p, "r = 255\ng = 128\nb = 0");
@@ -37,7 +37,7 @@ TEST_CASE("deserialize: именованные поля примитивов") {
   CHECK(v.b == 0);
 }
 
-TEST_CASE("deserialize: позиционное заполнение (значения без имён)") {
+TEST_CASE("deserialize: positional fill (values without names)") {
   tavl::parser p;
   p.add_default_operator();
   const auto v = tavl_test::deserialize_all<rgb>(p, "255\n128\n0");
@@ -46,7 +46,7 @@ TEST_CASE("deserialize: позиционное заполнение (значе�
   CHECK(v.b == 0);
 }
 
-TEST_CASE("deserialize: контейнеры (vector/array/pair/tuple)") {
+TEST_CASE("deserialize: containers (vector/array/pair/tuple)") {
   tavl::parser p;
   p.add_default_operator();
   const auto v = tavl_test::deserialize_all<bag>(p,
@@ -60,7 +60,7 @@ TEST_CASE("deserialize: контейнеры (vector/array/pair/tuple)") {
   CHECK(std::get<2>(v.t) == true);
 }
 
-TEST_CASE("deserialize: pair/tuple — inline, блок и обёртка в []") {
+TEST_CASE("deserialize: pair/tuple — inline, block and [] wrapper") {
   tavl::parser p;
   p.add_default_operator();
 
@@ -89,7 +89,7 @@ TEST_CASE("deserialize: pair/tuple — inline, блок и обёртка в []"
   CHECK(v.bracket_pair  == std::pair<std::string, std::string>{"x", "y"});
 }
 
-TEST_CASE("deserialize: ассоциативные (map/set)") {
+TEST_CASE("deserialize: associative containers (map/set)") {
   tavl::parser p;
   p.add_default_operator();
   const auto v = tavl_test::deserialize_all<assoc>(p, "m = {a = 1, b = 2}\ns = [3, 1, 2]");
@@ -99,7 +99,7 @@ TEST_CASE("deserialize: ассоциативные (map/set)") {
   CHECK(v.s == std::set<int>{1, 2, 3});
 }
 
-TEST_CASE("deserialize: optional/unique_ptr (null -> пусто)") {
+TEST_CASE("deserialize: optional/unique_ptr (null -> empty)") {
   tavl::parser p;
   p.add_default_operator();
   const auto v = tavl_test::deserialize_all<opt>(p, "a = 5\nb = null\nc = 9");
@@ -110,7 +110,7 @@ TEST_CASE("deserialize: optional/unique_ptr (null -> пусто)") {
   CHECK(*v.c == 9);
 }
 
-TEST_CASE("deserialize: char-буфер с zero-fill хвоста") {
+TEST_CASE("deserialize: char buffer with zero-filled tail") {
   tavl::parser p;
   p.add_default_operator();
   const auto v = tavl_test::deserialize_all<buf>(p, "name = hello");
@@ -118,7 +118,7 @@ TEST_CASE("deserialize: char-буфер с zero-fill хвоста") {
   CHECK(v.name[5] == '\0');
 }
 
-TEST_CASE("deserialize: целые кросс-кастятся (hex/oct/bin)") {
+TEST_CASE("deserialize: integers cross-cast (hex/oct/bin)") {
   tavl::parser p;
   p.add_default_operator();
   const auto v = tavl_test::deserialize_all<rgb>(p, "r = 0xFF\ng = 0o20\nb = 0b1000");
@@ -127,7 +127,7 @@ TEST_CASE("deserialize: целые кросс-кастятся (hex/oct/bin)") {
   CHECK(v.b == 8);
 }
 
-TEST_CASE("deserialize: стриминг по байту == целиком") {
+TEST_CASE("deserialize: byte-by-byte streaming == all at once") {
   tavl::parser p;
   p.add_default_operator();
   const std::string_view src = "nums = [1, 2, 3]\narr = [4, 5, 6]\nkv = (key, 7)\nt = (1, hi, true)";
@@ -141,12 +141,12 @@ TEST_CASE("deserialize: стриминг по байту == целиком") {
   CHECK(whole.t == streamed.t);
 }
 
-TEST_CASE("round-trip: serialize -> deserialize сохраняет значения") {
+TEST_CASE("round-trip: serialize -> deserialize preserves values") {
   tavl::parser p;
   p.add_default_operator();
 
   // round-trip — для структур (целевой кейс); голые контейнеры на верхнем уровне оборачиваем в структуру
-  SUBCASE("ассоциативные через структуру") {
+  SUBCASE("associative containers via a struct") {
     const assoc a{ {{"a", 1}, {"b", 2}, {"c", 3}}, {1, 2, 3} };
     const auto r = tavl_test::round_trip(p, a);
     CHECK(r.m == a.m);
@@ -173,7 +173,7 @@ static std::vector<data> read_all(tavl::parser& p, std::string_view src) {
   return out;
 }
 
-TEST_CASE("deserialize_next: одиночный файл -> один экземпляр") {
+TEST_CASE("deserialize_next: single file -> one instance") {
   tavl::parser p;
   p.add_default_operator();
   const auto v = read_all(p, "a = 5\nb = 6\nc = 1 2 3");
@@ -183,7 +183,7 @@ TEST_CASE("deserialize_next: одиночный файл -> один экзем�
   CHECK(v[0].c == std::array<int, 3>{1, 2, 3});
 }
 
-TEST_CASE("deserialize_next: файл-список -> N экземпляров (тот же цикл)") {
+TEST_CASE("deserialize_next: list file -> N instances (the same loop)") {
   tavl::parser p;
   p.add_default_operator();
   const auto v = read_all(p, "(a = 4, b = 2, c = (4,5,6)),(a = 0, b = 2, c = 7 8 9),");
@@ -194,18 +194,18 @@ TEST_CASE("deserialize_next: файл-список -> N экземпляров (
   CHECK(v[1].c == std::array<int, 3>{7, 8, 9});
 }
 
-TEST_CASE("deserialize_next: разные валидные формы списка") {
+TEST_CASE("deserialize_next: various valid list forms") {
   tavl::parser p;
   p.add_default_operator();
 
-  SUBCASE("case1: запятые между полями, всё в одну строку") {
+  SUBCASE("case1: commas between fields, all on one line") {
     const auto v = read_all(p, "(a=1,b=2,c=1 2 3),(a=2,b=3,c=2 3 4)");
     REQUIRE(v.size() == 2);
     CHECK(v[0].a == 1); CHECK(v[0].b == 2); CHECK(v[0].c == std::array<int, 3>{1, 2, 3});
     CHECK(v[1].a == 2); CHECK(v[1].b == 3); CHECK(v[1].c == std::array<int, 3>{2, 3, 4});
   }
 
-  SUBCASE("case2: многострочные блоки, смешанные ,/\\n, разделены пустой строкой") {
+  SUBCASE("case2: multiline blocks, mixed ,/\\n, separated by a blank line") {
     const auto v = read_all(p,
         "(\n"
         "  a=1,\n"
@@ -223,7 +223,7 @@ TEST_CASE("deserialize_next: разные валидные формы списк
     CHECK(v[1].a == 1); CHECK(v[1].b == 2); CHECK(v[1].c == std::array<int, 3>{4, 5, 6});
   }
 
-  SUBCASE("case3: переносы внутри блоков, запятая между блоками, хвостовая запятая") {
+  SUBCASE("case3: line breaks inside blocks, comma between blocks, trailing comma") {
     const auto v = read_all(p,
         "(\n"
         "a = 4, b = 2, c = (4,5,6)\n"
@@ -236,7 +236,7 @@ TEST_CASE("deserialize_next: разные валидные формы списк
   }
 }
 
-TEST_CASE("streaming: release_consumed держит буфер ввода ограниченным") {
+TEST_CASE("streaming: release_consumed keeps the input buffer bounded") {
   // имитация сетевых пачек: по одному экземпляру за раз, между ними сбрасываем прочитанное
   const char* packets[] = {
     "(a=1,b=2,c=1 2 3),",
@@ -270,7 +270,7 @@ TEST_CASE("streaming: release_consumed держит буфер ввода огр
   CHECK(peak_buffer < 40);
 }
 
-TEST_CASE("классификация single/list через parser::peek (не разрушает поток)") {
+TEST_CASE("single/list classification via parser::peek (doesn't consume the stream)") {
   // первое СОДЕРЖАТЕЛЬНОЕ событие: блок-begin -> список, иначе -> одиночный
   const auto first_content = [](tavl::parser& pp) {
     while (true) {

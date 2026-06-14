@@ -9,25 +9,25 @@ static std::string tag_ast(tavl::parser& p, std::string_view src) {
   return tavl_test::ast_str(p, nodes);
 }
 
-TEST_CASE("tag_ast: тег со значением через оператор") {
+TEST_CASE("tag_ast: a tag with a value via an operator") {
   tavl::parser p;
   p.add_default_operator();
   CHECK(tag_ast(p, "name = value") == "(pair '=' (tok 'name') (row 'name' (tok 'value')))");
 }
 
-TEST_CASE("tag_ast: тег с несколькими данными (оператор синтетический)") {
+TEST_CASE("tag_ast: a tag with multiple data items (synthetic operator)") {
   tavl::parser p;
   p.add_default_operator();
   CHECK(tag_ast(p, "widget a b") == "(pair (tok 'widget') (row 'widget' (tok 'a') (tok 'b')))");
 }
 
-TEST_CASE("tag_ast: одиночный токен — строка данных") {
+TEST_CASE("tag_ast: a single token — a data row") {
   tavl::parser p;
   p.add_default_operator();
   CHECK(tag_ast(p, "lonely") == "(tok 'lonely')");
 }
 
-TEST_CASE("tag_ast: количество детей через node_view") {
+TEST_CASE("tag_ast: child count via node_view") {
   tavl::parser p;
   p.add_default_operator();
   const auto nodes = tavl_test::build_ast(p, "name = value", tavl::make_tag_ast);

@@ -9,25 +9,25 @@ static std::string math_ast(tavl::parser& p, std::string_view src) {
   return tavl_test::ast_str(p, nodes);
 }
 
-TEST_CASE("math_ast: приоритет * выше +") {
+TEST_CASE("math_ast: * has higher precedence than +") {
   tavl::parser p;
   p.add_math_default_operators();
   CHECK(math_ast(p, "a + b * c") == "(pair '+' (tok 'a') (pair '*' (tok 'b') (tok 'c')))");
 }
 
-TEST_CASE("math_ast: левоассоциативность одинакового приоритета") {
+TEST_CASE("math_ast: left-associativity of equal precedence") {
   tavl::parser p;
   p.add_math_default_operators();
   CHECK(math_ast(p, "a * b + c") == "(pair '+' (pair '*' (tok 'a') (tok 'b')) (tok 'c'))");
 }
 
-TEST_CASE("math_ast: скобки переопределяют приоритет") {
+TEST_CASE("math_ast: brackets override precedence") {
   tavl::parser p;
   p.add_math_default_operators();
   CHECK(math_ast(p, "a * (b + c)") == "(pair '*' (tok 'a') (pair '+' (tok 'b') (tok 'c')))");
 }
 
-TEST_CASE("math_ast: унарный префикс -> узел с одним ребёнком") {
+TEST_CASE("math_ast: unary prefix -> a node with a single child") {
   tavl::parser p;
   p.add_math_default_operators();
   CHECK(math_ast(p, "-a") == "(pair '-' (tok 'a'))");
@@ -38,7 +38,7 @@ TEST_CASE("math_ast: унарный префикс -> узел с одним р�
   CHECK(root.footprint() == 1);
 }
 
-TEST_CASE("node_view: обход AST (size/footprint/is_block/for_each/child/next_child_index)") {
+TEST_CASE("node_view: AST traversal (size/footprint/is_block/for_each/child/next_child_index)") {
   tavl::parser p;
   p.add_math_default_operators();
   const auto nodes = tavl_test::build_ast(p, "a + b * c", tavl::make_math_ast);
@@ -67,7 +67,7 @@ TEST_CASE("node_view: обход AST (size/footprint/is_block/for_each/child/nex
   CHECK(tavl::next_child_index(root.nodes, 1) == 2);
 }
 
-TEST_CASE("node_view: пустой span безопасен (дефолты invalid/token{})") {
+TEST_CASE("node_view: an empty span is safe (defaults invalid/token{})") {
   const tavl::node_view nv{};   // пустой span
   CHECK(nv.empty());
   CHECK(nv.type() == tavl::node_type::invalid);
