@@ -163,5 +163,3 @@ which otherwise skips the comment.)
 | `tests/features/` | lexer, parser, serialize, deserialize, chrono |
 | `tests/errors/` | error and misuse handling |
 | `tests/extensions/` | the three AST builders, separately |
-
-Design notes live as comments in the headers (in Russian) and in `CLAUDE.md`.
