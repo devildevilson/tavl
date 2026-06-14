@@ -8,16 +8,16 @@
 
 #include "tavl/common.h"
 
-// lexer - токенизатор формата tavl. char_storage накапливает байты (resolve/peek по абсолютному
-// смещению, release_before освобождает прочитанное). lexer::lex() выдаёт по одному токену из storage
-// и возвращает token_type::not_enought_data, если данных не хватает; после finish() дотокенизирует
-// хвост. Операторы регистрируются с метаданными (фиксность/приоритет): символьные add_operator,
-// литеральные add_litteral_operator; operator_info отдаёт метаданные (один оператор может иметь
-// несколько фиксностей). lexer_state - резюмируемое состояние между вызовами.
+// lexer - the tokenizer for the tavl format. char_storage accumulates bytes (resolve/peek by
+// absolute offset, release_before frees what has been read). lexer::lex() yields one token at a time
+// from storage and returns token_type::not_enought_data when there isn't enough data; after finish()
+// it tokenizes the trailing tail. Operators are registered with metadata (fixity/precedence):
+// symbolic via add_operator, literal via add_litteral_operator; operator_info returns the metadata
+// (a single operator may have several fixities). lexer_state - the resumable state between calls.
 //
-// Если накопленная последовательность не распознаётся как один токен (число/дата/идентификатор/...),
-// лексер делает второй заход в режиме identifier: расщепляет её на зарегистрированные операторы +
-// идентификаторы (longest-match). Если и это не помогло - выдаёт token_type::unrecognized.
+// If the accumulated sequence isn't recognized as a single token (number/date/identifier/...),
+// the lexer makes a second pass in identifier mode: it splits the sequence into registered operators +
+// identifiers (longest-match). If that doesn't help either - it yields token_type::unrecognized.
 namespace tavl {
 
 struct char_storage {

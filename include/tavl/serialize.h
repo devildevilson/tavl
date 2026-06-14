@@ -18,31 +18,31 @@
 #include "tavl/detail.h"
 #include "tavl/type_traits.h"
 
-// --- serialize: текстовое представление C++ структуры в формате tavl ---
-// Зеркало deserialize: тот же if constexpr-диспетчер и те же трейты ds_* (type_traits.h),
-// но вместо чтения событий пишем строку. Соответствие типов скобкам (как читает deserialize):
-//   агрегат с именами -> { field = val }   агрегат без имён (за порогом глубины) -> ( val, val )
+// --- serialize: textual representation of a C++ struct in the tavl format ---
+// The mirror of deserialize: the same if constexpr dispatcher and the same ds_* traits (type_traits.h),
+// but instead of reading events we write a string. Type-to-bracket mapping (as deserialize reads it):
+//   named aggregate -> { field = val }   unnamed aggregate (past the depth threshold) -> ( val, val )
 //   pair/tuple -> ( … )    vector/list/deque/std::array/set -> [ … ]    map -> { k = v }
-//   корневой агрегат -> голые строки без скобок (неявный глобальный tuple файла).
-// Примитивы: bool->true/false; интегральные/плавающие -> std::vformat по форматной строке опций
-//   (пусто -> to_chars, кратчайшее round-trip); std::string/char[N]/array<char,N>/const char* ->
-//   идентификатор без кавычек если безопасно, иначе "…" с escape; optional/unique_ptr -> null либо значение.
+//   root aggregate -> bare rows without brackets (the file's implicit global tuple).
+// Primitives: bool->true/false; integral/floating -> std::vformat using the options' format string
+//   (empty -> to_chars, shortest round-trip); std::string/char[N]/array<char,N>/const char* ->
+//   identifier without quotes if safe, otherwise "…" with escaping; optional/unique_ptr -> null or the value.
 //
-// Опции - структура sopts, переданная ЦЕЛИКОМ как non-type template parameter
-//   (template <auto Opts = sopts{}>), т.е. compile-time константа. Поля: int_fmt/float_fmt (форматные
-//   строки std::vformat), serialize_cstr/follow_pointers/prettify/quote_all_strings/indent/names_depth/
-//   wrap_at. Строковые поля - тип ser_str (структурный буфер фикс. ёмкости), т.к. std::string/string_view
-//   нельзя класть в NTTP. follow_pointers - compile-time НАМЕРЕННО: при false ветка *val не инстанцируется
-//   (иначе void*/функц.указатели не компилировались бы). Вызов: tavl::serialize<sopts{ .prettify = false }>(val, out).
+// Options - the sopts struct, passed WHOLE as a non-type template parameter
+//   (template <auto Opts = sopts{}>), i.e. a compile-time constant. Fields: int_fmt/float_fmt (std::vformat
+//   format strings), serialize_cstr/follow_pointers/prettify/quote_all_strings/indent/names_depth/
+//   wrap_at. The string fields have type ser_str (a structural fixed-capacity buffer), since std::string/
+//   string_view can't be put in an NTTP. follow_pointers is compile-time ON PURPOSE: when false the *val
+//   branch isn't instantiated (otherwise void*/function pointers wouldn't compile). Call: tavl::serialize<sopts{ .prettify = false }>(val, out).
 //
-// Расширение пользовательским типом T: рекурсия зовёт `serialize<Opts>(child, out, depth)` (с явным
-//   NTTP Opts), поэтому перегрузка должна быть ШАБЛОНОМ по auto Opts и жить в неймспейсе T (находится
-//   по ADL; более специализированная, чем primary -> побеждает partial ordering):
+// Extending with a custom type T: the recursion calls `serialize<Opts>(child, out, depth)` (with an explicit
+//   NTTP Opts), so the overload must be a TEMPLATE over auto Opts and live in T's namespace (found
+//   by ADL; more specialized than the primary -> wins partial ordering):
 //     template <auto Opts> bool serialize(const T& v, std::string& out, size_t depth) { … }
-//   Возвращает true при полной записи (false - bounded-режим упёрся в out.capacity()); проще всего
-//   вернуть результат `tavl::ser_string<Opts>(...)` / `ser_put<Opts>(...)` (они уважают bounded и эскейп).
-//   depth можно игнорировать. Пример - enum color в main.cpp.
-//   Использование: std::string out; tavl::serialize(value, out);
+//   Returns true on a complete write (false - bounded mode hit out.capacity()); the easiest is to
+//   return the result of `tavl::ser_string<Opts>(...)` / `ser_put<Opts>(...)` (they respect bounded and escaping).
+//   depth may be ignored. Example - enum color in main.cpp.
+//   Usage: std::string out; tavl::serialize(value, out);
 
 namespace tavl {
 

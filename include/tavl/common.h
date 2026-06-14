@@ -4,12 +4,12 @@
 #include <cstdint>
 #include <string_view>
 
-// Базовые типы tavl, общие для всех слоёв: enum'ы token_type/event_type/error_type (генерируются
-// из X-макросов TAVL_*_TYPE_LIST - новый вид добавляется ОДНОЙ строкой в макрос, to_string и
-// предикаты подхватят), плюс token/event/error/source_span/iso_datetime, метаданные операторов
-// (op_fixity/op_assoc/op_info) и узел AST node (+node_view в ext.h).
-// ВАЖНО: порядок error_type значим - всё начиная с err_bracket_missmatch критично (error::is_critical),
-// warning'и идут до этой границы.
+// Core tavl types shared by every layer: the token_type/event_type/error_type enums (generated
+// from the TAVL_*_TYPE_LIST X-macros - a new kind is added with a SINGLE line in the macro, and
+// to_string and the predicates pick it up), plus token/event/error/source_span/iso_datetime, the
+// operator metadata (op_fixity/op_assoc/op_info) and the AST node type (+node_view in ext.h).
+// IMPORTANT: error_type ordering matters - everything from err_bracket_missmatch onward is critical
+// (error::is_critical); warnings come before that boundary.
 
 #define TAVL_TOKEN_TYPE_LIST \
   X(invalid) \

@@ -10,9 +10,9 @@
 
 #include "tavl/common.h"
 
-// Низкоуровневые утилиты разбора: классификация символов, предикаты типов,
-// обработка escape-последовательностей строк. Вынесены сюда и сделаны публичными,
-// чтобы их могли использовать и лексер, и парсер, и внешний код.
+// Low-level parsing utilities: character classification, type predicates,
+// and handling of string escape sequences. Pulled out here and made public
+// so the lexer, the parser, and external code can all use them.
 namespace tavl::detail {
 
 inline constexpr std::string_view operator_chars = "!@#$%^&*-+=<>/?|~";

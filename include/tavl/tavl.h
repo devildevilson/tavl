@@ -1,21 +1,21 @@
 #pragma once
 
 /**
- * Зонтичный заголовок tavl: тянет все слои библиотеки одним include.
- *   common      - типы/енумы (token/event/error/node), X-macro списки
- *   detail      - утилиты разбора (классификация символов, предикаты типов, unescape)
- *   lexer       - char_storage + lexer (байты -> токены)
- *   parser      - parser (токены -> события), to_* преобразования
- *   type_traits - трейты типов для deserialize
- *   ext         - расширения поверх событий: сборка AST (make_pair_ast/make_tag_ast/make_math_ast)
- *   deserialize - заполнение C++ структуры из потока событий
- *   serialize   - обратное к deserialize: текстовое представление C++ структуры
+ * The tavl umbrella header: pulls in every library layer with a single include.
+ *   common      - types/enums (token/event/error/node), X-macro lists
+ *   detail      - parsing utilities (character classification, type predicates, unescaping)
+ *   lexer       - char_storage + lexer (bytes -> tokens)
+ *   parser      - parser (tokens -> events), to_* conversions
+ *   type_traits - type traits for deserialize
+ *   ext         - extensions over the event stream: AST building (make_pair_ast/make_tag_ast/make_math_ast)
+ *   deserialize - filling a C++ struct from the event stream
+ *   serialize   - the inverse of deserialize: textual representation of a C++ struct
  *
- * Парсер устойчив к частичному вводу: принимаем пачку символов (flush) и
- * выдаём события (poll_event) - begin object/tuple/array/row, got_token и т.д.
- * Абстракция строки (row): идентификатор + оператор + последовательные данные;
- * запятая или новая строка заканчивают строку. Строки живут в блоках
- * array/object/tuple, по умолчанию есть глобальный tuple.
+ * The parser is resilient to partial input: you feed a chunk of characters (flush) and
+ * poll for events (poll_event) - begin object/tuple/array/row, got_token, etc.
+ * The row abstraction: identifier + operator + sequential data;
+ * a comma or a newline ends a row. Rows live inside array/object/tuple
+ * blocks, with an implicit global tuple by default.
  */
 
 #include "tavl/common.h"

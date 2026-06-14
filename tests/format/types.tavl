@@ -1,42 +1,42 @@
 // =============================================================================
-//  tavl — распознаваемые типы данных
-//  Каждая строка формата: identifier = value  (оператор '=' связывает имя и значение)
-//  Запятая ИЛИ перевод строки завершают строку. Файл — неявный кортеж.
+//  tavl — recognized data types
+//  Every row has the form: identifier = value  (the '=' operator binds name to value)
+//  A comma OR a newline ends a row. The file is an implicit tuple.
 // =============================================================================
 
-// null — явное отсутствие значения (также NULL)
+// null — an explicit absence of a value (also NULL)
 nothing = null
 
-// boolean — true | false (также TRUE | FALSE)
+// boolean — true | false (also TRUE | FALSE)
 flag_on  = true
 flag_off = false
 
-// целые числа: десятичные (со знаком), hex (0x), octal (0o), binary (0b)
+// integers: decimal (signed), hex (0x), octal (0o), binary (0b)
 answer  = 42
 below   = -7
 mask    = 0xFF
 perms   = 0o755
 flags   = 0b1010
 
-// числа с плавающей точкой: обычные, экспонента, ведущая точка, спец-значения
+// floating-point numbers: plain, exponent, leading dot, special values
 pi       = 3.14159
 avogadro = 6.022e23
 half     = .5
 infinity = inf
 not_num  = nan
 
-// строки:
-//   '...' — мультистрока с минимальным escape (только \' и \\), всё прочее как есть
-//   "..." — стандартные escape (\n \t \r ...) + юникод \uXXXX / \UXXXXXXXX
+// strings:
+//   '...' — multiline string with minimal escaping (only \' and \\), everything else as-is
+//   "..." — standard escapes (\n \t \r ...) + unicode \uXXXX / \UXXXXXXXX
 raw_path = 'C:\Users\name'
 message  = "line one\nline two\ttabbed"
 emoji    = "heart ❤ grin \U0001F600"
 
-// datetime в формате ISO; разделитель даты/времени — 'T' или '_'; опц. дробь и пояс
+// datetime in ISO format; date/time separator — 'T' or '_'; optional fraction and timezone
 date_only = 2026-06-14
 stamp_t   = 2026-06-14T12:30:00
 stamp_u   = 2026-06-14_12:30:00.500Z
 stamp_tz  = 2026-06-14T12:30:00+05:00
 
-// идентификатор как значение: [A-Za-z_][A-Za-z0-9_.]* (допускается точка)
+// identifier as a value: [A-Za-z_][A-Za-z0-9_.]* (a dot is allowed)
 reference = some.nested.field

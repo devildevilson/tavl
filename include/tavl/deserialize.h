@@ -22,23 +22,24 @@
 #include "tavl/parser.h"
 #include "tavl/type_traits.h"
 
-// --- deserialize: заполнение C++ структуры из потока событий парсера ---
-// Рекурсивный спуск. Имя поля = идентификатор строки, оператор '=' игнорируется. Поддержано:
-// примитивы (bool / интегральные с взаимным кастом / float) / std::string / char[N] и std::array<char,N> /
-// optional / unique_ptr / pair / tuple / std::array / vector-list-deque / map / set / агрегаты.
+// --- deserialize: filling a C++ struct from the parser's event stream ---
+// Recursive descent. The field name = the row identifier, the '=' operator is ignored. Supported:
+// primitives (bool / integral with mutual casting / float) / std::string / char[N] and std::array<char,N> /
+// optional / unique_ptr / pair / tuple / std::array / vector-list-deque / map / set / aggregates.
 //
-// РЕЗЮМ: на not_enought_data ставим ctx.stalled и разматываемся наружу (после каждого ct_peek/ct_next и
-// вложенного deserialize - `if (ctx.stalled) return;`). Вызывающий доливает данные и зовёт снова - продолжаем
-// по стеку кадров ctx.frames (std::deque - ссылки на кадр и carry стабильны при рекурсивном push). Частичное
-// значение живёт В МЕСТЕ НАЗНАЧЕНИЯ (поле/слот/array[i]/back()), ключ map / элемент set - в frame::carry (std::any),
-// глубина незавершённого пропуска - в frame::skip_depth. Контейнеры НЕ держим локально - всё в ctx/кадре.
+// RESUME: on not_enought_data we set ctx.stalled and unwind outward (after each ct_peek/ct_next and
+// nested deserialize - `if (ctx.stalled) return;`). The caller tops up the data and calls again - we resume
+// along the frame stack ctx.frames (std::deque - references to a frame and its carry stay stable across a
+// recursive push). The partial value lives AT ITS DESTINATION (field/slot/array[i]/back()), a map key /
+// set element - in frame::carry (std::any), the depth of an unfinished skip - in frame::skip_depth.
+// Containers are NOT held locally - everything lives in ctx/the frame.
 //   ct_context ctx; do { p.flush(chunk); deserialize(p, ctx, val); } while (ctx.stalled);
-// Ошибки парсера и десериализации (незаполненные/дублированные поля, переполнение, длинная строка) - в ctx.diagnostics.
+// Parser and deserialization errors (missing/duplicate fields, overflow, too-long string) - in ctx.diagnostics.
 //
-// Расширение пользовательским типом T: рекурсия зовёт deserialize(p, ctx, child) НЕквалифицированно,
-// поэтому перегрузка - НЕшаблонная, в неймспейсе T (находится по ADL; точное совпадение бьёт шаблон):
+// Extending with a custom type T: the recursion calls deserialize(p, ctx, child) UNqualified,
+// so the overload is NON-template, in T's namespace (found by ADL; an exact match beats the template):
 //     void deserialize(tavl::parser& p, tavl::ct_context& ctx, T& val) { ... }
-// Внутри читать через ct_peek/ct_next и соблюдать резюм-контракт (после каждого - if (ctx.stalled) return;).
+// Inside, read via ct_peek/ct_next and honor the resume contract (after each one - if (ctx.stalled) return;).
 
 namespace tavl {
 

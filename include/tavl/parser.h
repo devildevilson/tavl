@@ -11,15 +11,16 @@
 #include "tavl/common.h"
 #include "tavl/lexer.h"
 
-// parser - разбор потока байтов в события формата tavl.
-// Вход подаётся кусками через flush(); парсер передаёт байты лексеру, читает токены и проверяет
-// их на соответствие формату. finish() сообщает о конце ввода - после него придёт событие eof.
-// События с сопутствующими ошибками читаются через poll_event(); ошибки НЕ прерывают разбор
-// (критичность - error::is_critical). Операторы регистрируются add_operator / add_litteral_operator
-// (или наборами add_*_default_operators). Режим разбора строк блока (parse_mode) по умолчанию следует
-// из типа скобки; override_next_block_modes подменяет его, и подмена наследуется вложенными блоками.
-// to_* преобразуют токен в C++ значение. block_type / parse_mode / block_modes / block_frame -
-// вспомогательные типы стека блоков. emit/close_*/open_block - внутренние шаги poll_event.
+// parser - parses a byte stream into tavl-format events.
+// Input is fed in chunks via flush(); the parser passes the bytes to the lexer, reads tokens and
+// checks them against the format. finish() signals end of input - an eof event follows it.
+// Events with their accompanying errors are read through poll_event(); errors do NOT interrupt
+// parsing (criticality - error::is_critical). Operators are registered with add_operator /
+// add_litteral_operator (or in bundles via add_*_default_operators). A block's row parse mode
+// (parse_mode) by default follows the bracket type; override_next_block_modes replaces it, and the
+// override is inherited by nested blocks. to_* convert a token into a C++ value. block_type /
+// parse_mode / block_modes / block_frame are helper types of the block stack. emit/close_*/open_block
+// are the internal steps of poll_event.
 namespace tavl {
 
 enum class block_type {

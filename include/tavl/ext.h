@@ -8,20 +8,20 @@
 #include "tavl/common.h"
 #include "tavl/parser.h"
 
-// Расширения поверх потока событий парсера. Три построителя AST (плоский tavl::node):
-//   make_pair_ast - все операторы равны, бинарны, правоассоциативны; свободные операнды -> row;
-//                   скобки -> tuple/object/array.
-//   make_tag_ast  - XML/HCL-подобные теги: идентификатор строки = тег, данные после оператора =
-//                   атрибуты (k=v -> пара атрибут-значение).
-//   make_math_ast - матвыражения с приоритетом/фиксностью/ассоциативностью операторов (Pratt).
-// Каждый построитель разбирает ОДНУ строку за вызов и иммунен к not_enought_data: всё состояние
-// текущей строки в ast_context, на нехватке данных возвращаемся и продолжаем при следующем вызове.
-// ignore_to_row_end пропускает остаток строки (для отдачи строки стороннему разбору).
+// Extensions over the parser's event stream. Three AST builders (the flat tavl::node):
+//   make_pair_ast - all operators equal, binary, right-associative; free operands -> row;
+//                   brackets -> tuple/object/array.
+//   make_tag_ast  - XML/HCL-like tags: the row identifier = the tag, data after the operator =
+//                   attributes (k=v -> an attribute-value pair).
+//   make_math_ast - math expressions honoring operator precedence/fixity/associativity (Pratt).
+// Each builder parses ONE row per call and is immune to not_enought_data: all state for the
+// current row lives in ast_context, so on a data shortage we return and continue on the next call.
+// ignore_to_row_end skips the rest of a row (to hand the row off to another parser).
 //
-// node_view - обход построенного дерева: представление поддерева как span, где nodes[0] - корень,
-// дальше плоско его потомки. Прямой ребёнок начинается со слота +1, шаг до следующего = footprint+1
-// (child_count корня = футпринт, число слотов под всех потомков). Пустой span безопасен:
-// root() -> дефолтный node{} (type=invalid, token{}), size()=0.
+// node_view - traversal of the built tree: a subtree viewed as a span where nodes[0] is the root,
+// followed flatly by its descendants. A direct child starts at slot +1, the step to the next is
+// footprint+1 (the root's child_count = its footprint, the number of slots for all descendants).
+// An empty span is safe: root() -> a default node{} (type=invalid, token{}), size()=0.
 namespace tavl {
 
 struct ast_context {

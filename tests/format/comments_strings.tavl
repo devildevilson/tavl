@@ -1,27 +1,27 @@
 // =============================================================================
-//  tavl — комментарии и строки
+//  tavl — comments and strings
 // =============================================================================
 
-// это однострочный комментарий (// до конца строки)
+// this is a single-line comment (// to the end of the line)
 
-/* а это блочный
-   комментарий, который
-   занимает несколько строк */
+/* and this is a block
+   comment that spans
+   several lines */
 
-greeting = "hello\nworld"          // двойные кавычки: \n -> перевод строки при чтении
+greeting = "hello\nworld"          // double quotes: \n -> newline when read
 
-raw = 'C:\path\to\file'            // одинарные: \ не экранирует (кроме \' и \)
+raw = 'C:\path\to\file'            // single quotes: \ does not escape (except \' and \)
 
-multiline = "первая строка
-вторая строка"                      // строки многострочны: реальный перевод внутри "" допустим
+multiline = "first line
+second line"                        // strings are multiline: a real newline inside "" is allowed
 
-unicode = "\u2764 \U0001F600"      // \u — кодовая точка BMP, \U — астральная (4 байта)
+unicode = "\u2764 \U0001F600"      // \u — a BMP code point, \U — an astral one (4 bytes)
 
-quoted_id = "has spaces"           // если строка не валидный идентификатор — нужны кавычки
-plain_id  = no_spaces_here         // а так можно без кавычек
+quoted_id = "has spaces"           // if a string is not a valid identifier — quotes are required
+plain_id  = no_spaces_here         // otherwise quotes can be omitted
 
-// две строки с ОДИНАКОВЫМ содержимым, отличаются только идентификатором и типом кавычек.
-// double: все эти последовательности РАСПОЗНАЮТСЯ как escape (\n -> перевод строки, \uXXXX -> юникод).
-// single: НЕ экранирует ничего (кроме \' и \) — те же последовательности останутся ЛИТЕРАЛЬНЫМИ.
+// two rows with IDENTICAL content, differing only in identifier and quote type.
+// double: all of these sequences ARE RECOGNIZED as escapes (\n -> newline, \uXXXX -> unicode).
+// single: escapes NOTHING (except \' and \) — the same sequences stay LITERAL.
 dq = "\n \r \t \a \b \f \v \\ \" \u2764 \U0001F600"
 sq = '\n \r \t \a \b \f \v \\ \" \u2764 \U0001F600'

@@ -9,9 +9,9 @@
 #include <chrono>
 #include <type_traits>
 
-// Трейты для deserialize: распознавание стандартных типов (optional/unique_ptr/
-// pair/tuple/std::array/char-буфер) и категорий контейнеров (push_back-able,
-// map vs set) по утиной типизации. Используются в deserialize.h.
+// Traits for deserialize: detection of standard types (optional/unique_ptr/
+// pair/tuple/std::array/char-buffer) and container categories (push_back-able,
+// map vs set) by duck typing. Used in deserialize.h.
 namespace tavl {
 
 template <typename> struct ds_is_optional : std::false_type {};

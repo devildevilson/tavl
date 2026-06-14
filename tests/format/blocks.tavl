@@ -1,19 +1,19 @@
 // =============================================================================
-//  tavl — блоки и режимы разбора строк
-//  { } объект   — первый не-оператор = идентификатор строки, далее оператор и данные
-//  ( ) кортеж   — гибрид: есть id+оператор -> как объект, иначе -> как массив
-//  [ ] массив   — все токены трактуются как данные
-//  Разделители строк внутри блока: запятая ИЛИ перевод строки.
+//  tavl — blocks and row parsing modes
+//  { } object  — first non-operator = row identifier, then operator and data
+//  ( ) tuple   — hybrid: has id+operator -> acts as object, otherwise -> as array
+//  [ ] array   — every token is treated as data
+//  Row separators inside a block: a comma OR a newline.
 // =============================================================================
 
-// объект: пары идентификатор = значение
+// object: identifier = value pairs
 window = {
   width  = 1920
   height = 1080
   title  = "main"
 }
 
-// массив: просто последовательность значений (через запятую или перевод строки)
+// array: just a sequence of values (separated by commas or newlines)
 palette = [red, green, blue]
 sizes   = [
   16
@@ -21,24 +21,24 @@ sizes   = [
   64
 ]
 
-// "inline" запись: данные строки можно писать и БЕЗ скобок, прямо после оператора —
-// это та же последовательность значений, просто без обрамляющего блока
+// "inline" form: a row's data may also be written WITHOUT brackets, right after
+// the operator — it is the same sequence of values, just without an enclosing block
 sizes_inline = 16 32 64
 rgb_inline   = 255 128 0
 
-// идентификатор строки — ЛЮБОЙ токен, кроме скобок (не обязательно имя-идентификатор):
-42         = answer        // число как идентификатор строки
-"with spc" = quoted_key    // строка как идентификатор
-2026-01-01 = new_year      // дата как идентификатор
-true       = yes           // boolean как идентификатор
+// the row identifier is ANY token except brackets (not necessarily a name-identifier):
+42         = answer        // number as a row identifier
+"with spc" = quoted_key    // string as an identifier
+2026-01-01 = new_year      // date as an identifier
+true       = yes           // boolean as an identifier
 
-// кортеж как объект (именованные поля)
+// tuple as an object (named fields)
 point = (x = 10, y = 20)
 
-// кортеж как массив (позиционные значения)
+// tuple as an array (positional values)
 color = (255, 128, 0, 255)
 
-// вложенность блоков произвольной глубины
+// blocks nest to arbitrary depth
 scene = {
   camera = (0.0, 1.5, -3.0)
   objects = [
