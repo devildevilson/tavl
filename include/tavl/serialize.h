@@ -61,20 +61,20 @@ struct ser_str {
 };
 
 struct sopts {
-  ser_str<> int_fmt   = "{}";       // формат интегральных (std::format-спека); пусто -> to_chars
-  ser_str<> float_fmt = "{}";       // формат плавающих; пусто -> to_chars (кратчайшее round-trip)
-  bool serialize_cstr   = true;    // трактовать const char*/char* как null-terminated строку
-  bool follow_pointers  = false;    // разыменовывать сырые указатели (АСИММЕТРИЧНО - назад не читается)
+  ser_str<> int_fmt   = "{}";       // integer format (std::format spec); empty -> to_chars
+  ser_str<> float_fmt = "{}";       // float format; empty -> to_chars (shortest round-trip)
+  bool serialize_cstr   = false;   // serialize std::string_view / const char* / char* (ASYMMETRIC - deserialize can't read them back); off by default so serialize mirrors deserialize
+  bool follow_pointers  = false;   // dereference raw pointers (ASYMMETRIC - not read back)
 
-  bool prettify = true;             // переносы строк + отступы; false - компактно в одну строку
-  bool quote_all_strings = false;   // всегда заключать строки в "" с минимальным экранированием (иначе - только когда нужно)
-  bool full_escape = false;         // ВСЕ строки -> "" с полным escape (управляющие + юникод \u/\U): чистый ASCII для сети
-  bool iso_datetime = false;        // datetime: разделитель даты/времени - false -> '_' (дефолт формата), true -> 'T' (строгий ISO)
+  bool prettify = true;             // line breaks + indentation; false - compact, on a single line
+  bool quote_all_strings = false;   // always wrap strings in "" with minimal escaping (otherwise - only when needed)
+  bool full_escape = false;         // ALL strings -> "" with full escape (control chars + unicode \u/\U): pure ASCII for network transport
+  bool iso_datetime = false;        // datetime: date/time separator - false -> '_' (format default), true -> 'T' (strict ISO)
 
-  ser_str<> indent = "  ";          // отступ на один уровень вложенности (только при prettify)
-  size_t names_depth = SIZE_MAX;    // СТРОГО до какой глубины (число скобок) писать имена полей; 0 -> нигде (даже в root), SIZE_MAX -> везде
-  size_t wrap_at = 0;               // >0: в последовательностях ([]/set) переносить по wrap_at элементов на строку (prettify)
-  bool bounded = false;             // capacity-aware: не выходить за out.capacity(), на упоре остановиться (serialize -> false)
+  ser_str<> indent = "  ";          // indent for one nesting level (only when prettify)
+  size_t names_depth = SIZE_MAX;    // STRICTLY up to which depth (number of brackets) to write field names; 0 -> nowhere (not even at root), SIZE_MAX -> everywhere
+  size_t wrap_at = 0;               // >0: in sequences ([]/set) wrap every wrap_at elements onto a new line (prettify)
+  bool bounded = false;             // capacity-aware: do not grow past out.capacity(), stop at the boundary (serialize -> false)
 };
 
 // serialize возвращает true, если значение записано полностью; false - при bounded и упоре в out.capacity()
@@ -241,9 +241,9 @@ bool serialize(const T& val, std::string& out, size_t depth) {
   else if constexpr (std::is_same_v<T, std::string>) {
     return ser_string<Opts>(val, out);
   }
-  else if constexpr (std::is_same_v<T, std::string_view>) {   // под флагом cstr (асимметрично: deserialize не прочитает)
+  else if constexpr (std::is_same_v<T, std::string_view>) {   // gated by serialize_cstr (asymmetric: deserialize won't read it back)
     if constexpr (Opts.serialize_cstr) return ser_string<Opts>(val, out);
-    else static_assert(ser_always_false<T>, "tavl::serialize: std::string_view disabled - set serialize_cstr=true (асимметрично)");
+    else static_assert(ser_always_false<T>, "tavl::serialize: std::string_view disabled (asymmetric) - set serialize_cstr=true to allow");
   }
   else if constexpr (ds_is_char_array<T>::value) {            // char[N] / std::array<char,N>, до '\0'
     const char* data; size_t n;
@@ -260,11 +260,11 @@ bool serialize(const T& val, std::string& out, size_t depth) {
       static_assert(ser_always_false<T>, "tavl::serialize: const char* disabled - set serialize_cstr=true on options");
     }
   }
-  else if constexpr (std::is_pointer_v<T>) {                  // под флагом follow_pointers (асимметрично)
+  else if constexpr (std::is_pointer_v<T>) {                  // gated by follow_pointers (asymmetric)
     if constexpr (Opts.follow_pointers) {
       return val ? serialize<Opts>(*val, out, depth) : ser_put<Opts>(out, "null");
     } else {
-      static_assert(ser_always_false<T>, "tavl::serialize: raw pointer - set follow_pointers=true (асимметрично) or overload");
+      static_assert(ser_always_false<T>, "tavl::serialize: raw pointer disabled (asymmetric) - set follow_pointers=true or provide an overload");
     }
   }
   else if constexpr (ds_is_optional<T>::value) {
