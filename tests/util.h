@@ -1,0 +1,170 @@
+#pragma once
+
+// Утилиты для тестов: обёртки над стриминговым API tavl (поллинг событий, десериализация
+// целиком/по байту, round-trip, сборка и рендер AST в строку для сравнения в CHECK).
+
+#include <string>
+#include <string_view>
+#include <vector>
+#include <tuple>
+#include <span>
+
+#include "tavl/tavl.h"
+
+namespace tavl_test {
+
+struct ev_err {
+  tavl::event event;
+  tavl::error error;
+};
+
+// Флашит src целиком + finish, собирает ВСЕ (событие, ошибка) до eof включительно.
+inline std::vector<ev_err> poll_all(tavl::parser& p, std::string_view src) {
+  p.clear();
+  p.flush(src);
+  p.finish();
+
+  std::vector<ev_err> out;
+  while (true) {
+    auto [ev, err] = p.poll_event();
+    out.push_back({ev, err});
+    if (ev.type == tavl::event_type::eof) break;
+  }
+  return out;
+}
+
+inline bool has_critical(const std::vector<ev_err>& evs) {
+  for (const auto& e : evs) if (e.error.is_critical()) return true;
+  return false;
+}
+
+inline bool has_error(const std::vector<ev_err>& evs, tavl::error_type t) {
+  for (const auto& e : evs) if (e.error.type == t) return true;
+  return false;
+}
+
+inline size_t count_event(const std::vector<ev_err>& evs, tavl::event_type t) {
+  size_t n = 0;
+  for (const auto& e : evs) if (e.event.type == t) n += 1;
+  return n;
+}
+
+// Типы токенов всех событий got_token (для проверки лексера через поток событий).
+inline std::vector<tavl::token_type> got_token_types(const std::vector<ev_err>& evs) {
+  std::vector<tavl::token_type> out;
+  for (const auto& e : evs)
+    if (e.event.type == tavl::event_type::got_token) out.push_back(e.event.token.type);
+  return out;
+}
+
+// --- deserialize ---
+
+// Десериализация при полном флаше входа.
+template <typename T>
+inline T deserialize_all(tavl::parser& p, std::string_view src, tavl::ct_context& ctx) {
+  p.clear();
+  p.flush(src);
+  p.finish();
+  T val{};
+  tavl::deserialize(p, ctx, val);
+  return val;
+}
+
+template <typename T>
+inline T deserialize_all(tavl::parser& p, std::string_view src) {
+  tavl::ct_context ctx;
+  return deserialize_all<T>(p, src, ctx);
+}
+
+// Десериализация по chunk байт за раз (проверка резюма стриминга: stalled -> долить -> продолжить).
+template <typename T>
+inline T deserialize_streamed(tavl::parser& p, std::string_view src, size_t chunk = 1) {
+  p.clear();
+  tavl::ct_context ctx;
+  T val{};
+  size_t i = 0;
+  do {
+    if (i < src.size()) {
+      p.flush(src.substr(i, chunk));
+      i += chunk;
+      if (i >= src.size()) p.finish();
+    } else {
+      p.finish();
+    }
+    tavl::deserialize(p, ctx, val);
+  } while (ctx.stalled);
+  return val;
+}
+
+// round-trip: значение -> текст (serialize) -> обратно в значение (deserialize).
+template <auto Opts = tavl::sopts{}, typename T>
+inline T round_trip(tavl::parser& p, const T& val) {
+  std::string out;
+  tavl::serialize<Opts>(val, out);
+  return deserialize_all<T>(p, out);
+}
+
+template <auto Opts = tavl::sopts{}, typename T>
+inline std::string to_text(const T& val) {
+  std::string out;
+  tavl::serialize<Opts>(val, out);
+  return out;
+}
+
+// --- AST ---
+
+inline std::string_view node_type_name(tavl::node_type t) {
+  switch (t) {
+    case tavl::node_type::object: return "object";
+    case tavl::node_type::tuple:  return "tuple";
+    case tavl::node_type::array:  return "array";
+    case tavl::node_type::pair:   return "pair";
+    case tavl::node_type::row:    return "row";
+    case tavl::node_type::token:  return "tok";
+    default:                      return "invalid";
+  }
+}
+
+// Рекурсивный рендер плоского AST (nodes[0] - корень поддерева) в S-выражение:
+//   (pair '=' (tok 'a') (tok 'b')). Текст токена опускается, если пуст (синтетические узлы).
+inline void ast_node_str(const tavl::parser& p, const tavl::node* nodes, std::string& out) {
+  out += "(";
+  out += node_type_name(nodes[0].type);
+  const auto txt = p.content(nodes[0].token.span);
+  if (!txt.empty()) { out += " '"; out += std::string(txt); out += "'"; }
+  for (size_t i = 1; i < nodes[0].child_count + 1; i += nodes[i].child_count + 1) {
+    out += " ";
+    ast_node_str(p, &nodes[i], out);
+  }
+  out += ")";
+}
+
+inline std::string ast_str(const tavl::parser& p, const std::vector<tavl::node>& nodes) {
+  if (nodes.empty()) return "";
+  std::string out;
+  ast_node_str(p, nodes.data(), out);
+  return out;
+}
+
+// Прогоняет один builder (make_pair_ast / make_tag_ast / make_math_ast) над одной строкой src
+// и возвращает собранный AST. src флашится целиком. Прокручиваем до row_begin, как в демо.
+template <typename Builder>
+inline std::vector<tavl::node> build_ast(tavl::parser& p, std::string_view src, Builder builder) {
+  p.clear();
+  p.flush(src);
+  p.finish();
+
+  std::vector<tavl::node> nodes;
+  tavl::ast_context ctx;
+
+  tavl::event ev{};
+  tavl::error err;
+  do { std::tie(ev, err) = p.poll_event(); }
+  while (ev.type != tavl::event_type::row_begin && ev.type != tavl::event_type::eof);
+  if (ev.type == tavl::event_type::eof) return nodes;
+
+  std::tie(ev, err) = builder(p, ctx, nodes);
+  return nodes;
+}
+
+}  // namespace tavl_test
