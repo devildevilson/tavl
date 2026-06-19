@@ -148,23 +148,74 @@ inline std::string ast_str(const tavl::parser& p, const std::vector<tavl::node>&
 
 // Прогоняет один builder (make_pair_ast / make_tag_ast / make_math_ast) над одной строкой src
 // и возвращает собранный AST. src флашится целиком. Прокручиваем до row_begin, как в демо.
+struct ast_result {
+  tavl::event event;
+  tavl::error error;
+  std::vector<tavl::node> nodes;
+};
+
 template <typename Builder>
-inline std::vector<tavl::node> build_ast(tavl::parser& p, std::string_view src, Builder builder) {
+inline ast_result build_ast_result(tavl::parser& p, std::string_view src, Builder builder) {
   p.clear();
   p.flush(src);
   p.finish();
 
-  std::vector<tavl::node> nodes;
+  ast_result result;
   tavl::ast_context ctx;
 
   tavl::event ev{};
   tavl::error err;
   do { std::tie(ev, err) = p.poll_event(); }
   while (ev.type != tavl::event_type::row_begin && ev.type != tavl::event_type::eof);
-  if (ev.type == tavl::event_type::eof) return nodes;
+  if (ev.type == tavl::event_type::eof) {
+    result.event = ev;
+    result.error = err;
+    return result;
+  }
 
-  std::tie(ev, err) = builder(p, ctx, nodes);
-  return nodes;
+  std::tie(result.event, result.error) = builder(p, ctx, result.nodes);
+  return result;
+}
+
+template <typename Builder>
+inline std::vector<tavl::node> build_ast(tavl::parser& p, std::string_view src, Builder builder) {
+  return build_ast_result(p, src, builder).nodes;
+}
+
+template <typename Builder>
+inline ast_result build_ast_streamed(tavl::parser& p, std::string_view src, Builder builder, size_t chunk = 1) {
+  p.clear();
+
+  ast_result result;
+  tavl::ast_context ctx;
+  size_t i = 0;
+  bool finished = false;
+  bool in_row = false;
+
+  while (true) {
+    if (!in_row) {
+      auto [ev, err] = p.poll_event();
+      if (ev.type == tavl::event_type::row_begin) {
+        in_row = true;
+      } else if (ev.type == tavl::event_type::eof) {
+        result.event = ev;
+        result.error = err;
+        return result;
+      } else if (ev.type == tavl::event_type::not_enought_data) {
+        if (i < src.size()) { p.flush(src.substr(i, chunk)); i += chunk; }
+        else if (!finished) { p.finish(); finished = true; }
+      }
+      continue;
+    }
+
+    std::tie(result.event, result.error) = builder(p, ctx, result.nodes);
+    if (result.event.type == tavl::event_type::not_enought_data) {
+      if (i < src.size()) { p.flush(src.substr(i, chunk)); i += chunk; }
+      else if (!finished) { p.finish(); finished = true; }
+      continue;
+    }
+    return result;
+  }
 }
 
 }  // namespace tavl_test

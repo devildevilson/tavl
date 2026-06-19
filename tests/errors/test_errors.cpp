@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <memory>
+#include <optional>
 
 #include "util.h"
 
@@ -14,6 +16,8 @@ using tavl::event_type;
 namespace {
 struct rgb { int r, g, b; };
 struct buf { std::array<char, 4> s; };
+struct typed_fields { bool b; int i; unsigned u; double f; };
+struct nested_typed_fields { std::vector<int> nums; std::optional<unsigned> maybe; std::unique_ptr<double> ptr; };
 
 bool has_diag(const tavl::ct_context& ctx, error_type t) {
   for (const auto& d : ctx.diagnostics) if (d.error.type == t) return true;
@@ -80,6 +84,14 @@ TEST_CASE("error: duplicate field -> err_duplicate_field") {
   CHECK(has_diag(ctx, error_type::err_duplicate_field));
 }
 
+TEST_CASE("error: named field after positional fill is duplicate") {
+  tavl::parser p;
+  p.add_default_operator();
+  tavl::ct_context ctx;
+  tavl_test::deserialize_all<rgb>(p, "1\nr = 2\ng = 3\nb = 4", ctx);
+  CHECK(has_diag(ctx, error_type::err_duplicate_field));
+}
+
 TEST_CASE("error: extra positional values -> err_too_many_values") {
   tavl::parser p;
   p.add_default_operator();
@@ -94,6 +106,29 @@ TEST_CASE("error: too-long string in a char buffer -> err_string_too_long") {
   tavl::ct_context ctx;
   tavl_test::deserialize_all<buf>(p, "s = toolong", ctx);  // 7 символов в char[4]
   CHECK(has_diag(ctx, error_type::err_string_too_long));
+}
+
+TEST_CASE("error: primitive type mismatches produce err_expect_token diagnostics") {
+  tavl::parser p;
+  p.add_default_operator();
+  tavl::ct_context ctx;
+  tavl_test::deserialize_all<typed_fields>(p, "b = 1\ni = text\nu = -1\nf = text", ctx);
+
+  CHECK(has_diag(ctx, error_type::err_expect_token_boolean));
+  CHECK(has_diag(ctx, error_type::err_expect_token_number_int));
+  CHECK(has_diag(ctx, error_type::err_expect_token_number_uint));
+  CHECK(has_diag(ctx, error_type::err_expect_token_number_float));
+}
+
+TEST_CASE("error: nested primitive type mismatches produce err_expect_token diagnostics") {
+  tavl::parser p;
+  p.add_default_operator();
+  tavl::ct_context ctx;
+  tavl_test::deserialize_all<nested_typed_fields>(p, "nums = [1, text]\nmaybe = -1\nptr = text", ctx);
+
+  CHECK(has_diag(ctx, error_type::err_expect_token_number_int));
+  CHECK(has_diag(ctx, error_type::err_expect_token_number_uint));
+  CHECK(has_diag(ctx, error_type::err_expect_token_number_float));
 }
 
 // ---------------- TAVL_CHECK: громкий провал конфигурации ----------------

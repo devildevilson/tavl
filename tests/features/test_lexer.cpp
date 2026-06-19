@@ -109,6 +109,16 @@ TEST_CASE("lexer: values are converted via parser::to_*") {
   CHECK(dt->hh == 12);
 }
 
+TEST_CASE("lexer: malformed scalar tokens are reported as unrecognized") {
+  tavl::parser p;
+  const auto evs = tavl_test::poll_all(p, "[123abc, 0xZZ, @bad]");
+  const auto t = tavl_test::got_token_types(evs);
+  REQUIRE(t.size() == 3);
+  CHECK(t[0] == token_type::unrecognized);
+  CHECK(t[1] == token_type::unrecognized);
+  CHECK(t[2] == token_type::unrecognized);
+}
+
 TEST_CASE("lexer: byte-by-byte streaming yields the same token stream as all at once") {
   const std::string_view src = "[null, 42, \"a b\", ident]";
 
@@ -132,4 +142,36 @@ TEST_CASE("lexer: byte-by-byte streaming yields the same token stream as all at 
   }
 
   CHECK(a == b);
+}
+
+TEST_CASE("lexer: byte-by-byte streaming handles comments and escaped strings") {
+  const std::string_view src = "[\"a\\\"b\", /* block */ c] // line\n";
+
+  tavl::parser stream;
+  stream.clear();
+  std::vector<token_type> tokens;
+  size_t comments = 0;
+  std::string first_string;
+  size_t i = 0;
+  bool finished = false;
+  while (true) {
+    auto [ev, err] = stream.poll_event();
+    if (ev.type == event_type::got_token) {
+      tokens.push_back(ev.token.type);
+      if (first_string.empty() && ev.token.type == token_type::doublequote_string)
+        first_string = stream.to_string(ev.token);
+    }
+    if (ev.type == event_type::got_comment) comments += 1;
+    if (ev.type == event_type::eof) break;
+    if (ev.type == event_type::not_enought_data) {
+      if (i < src.size()) { stream.flush(src.substr(i, 1)); i += 1; }
+      else if (!finished) { stream.finish(); finished = true; }
+    }
+  }
+
+  REQUIRE(tokens.size() == 2);
+  CHECK(tokens[0] == token_type::doublequote_string);
+  CHECK(tokens[1] == token_type::identifier);
+  CHECK(first_string == "a\"b");
+  CHECK(comments == 2);
 }

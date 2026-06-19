@@ -123,10 +123,24 @@ TEST_CASE("parser: a row identifier can be any token except brackets") {
   CHECK(ids[3] == token_type::boolean);             // boolean
 }
 
+TEST_CASE("parser: peek returns the next event without consuming it") {
+  tavl::parser p;
+  p.add_default_operator();
+  p.flush("a = 1");
+  p.finish();
+
+  const auto peeked = p.peek();
+  const auto [polled, err] = p.poll_event();
+  CHECK(err.type == tavl::error_type::no_error);
+  CHECK(peeked.type == polled.type);
+  CHECK(peeked.token.type == polled.token.type);
+  CHECK(peeked.token.span.offset == polled.token.span.offset);
+}
+
 TEST_CASE("document separator: //--- is recognized, a normal comment is not") {
   tavl::parser p;
   p.add_default_operator();
-  p.flush("a = 1\n//---\nb = 2\n// normal comment");
+  p.flush("a = 1\n//--- \t\r\nb = 2\n// normal comment");
   p.finish();
 
   int comments = 0, seps = 0;

@@ -451,10 +451,25 @@ static bool math_bracket_at(const ast_context& ctx, size_t i) {
   return is_begin_block(t) && t != event_type::row_begin;   // () {} [] - единообразно
 }
 
+static bool math_expr_end_at(const ast_context& ctx, size_t i) {
+  if (i >= ctx.op_stack.size()) return true;
+  const auto t = ctx.op_stack[i].event.type;
+  return t == event_type::row_end || is_end_block(t);
+}
+
 // primary: группа в скобках либо лист-токен
 static size_t math_parse_primary(parser& p, ast_context& ctx, size_t& i) {
+  if (math_expr_end_at(ctx, i)) {
+    ctx.had_error = true;
+    return 0;
+  }
   if (math_bracket_at(ctx, i)) return math_parse_bracket(p, ctx, i);
-  if (i >= ctx.op_stack.size()) return 0;
+
+  if (ctx.op_stack[i].event.token.type == token_type::op) {
+    ctx.had_error = true;
+    return 0;
+  }
+
   ctx.rpn_output.push_back(ast_context::event_args{ctx.op_stack[i].event, 0});   // лист
   i += 1;
   return 1;
@@ -463,6 +478,7 @@ static size_t math_parse_primary(parser& p, ast_context& ctx, size_t& i) {
 // постфикс + вызов функции (скобка сразу после primary)
 static size_t math_parse_postfix(parser& p, ast_context& ctx, size_t& i) {
   size_t fp = math_parse_primary(p, ctx, i);
+  if (fp == 0) return 0;
   while (i < ctx.op_stack.size()) {
     op_info info;
     if (math_op_at(p, ctx, i, op_fixity::postfix, info)) {
@@ -485,6 +501,10 @@ static size_t math_parse_prefix(parser& p, ast_context& ctx, size_t& i) {
   if (math_op_at(p, ctx, i, op_fixity::prefix, info)) {
     const auto op = ctx.op_stack[i].event; i += 1;
     const size_t operand_fp = math_parse_prefix(p, ctx, i);
+    if (operand_fp == 0) {
+      ctx.had_error = true;
+      return 0;
+    }
     ctx.rpn_output.push_back(ast_context::event_args{op, operand_fp});   // унарный префикс: 1 ребёнок
     return 1 + operand_fp;
   }
@@ -494,6 +514,7 @@ static size_t math_parse_prefix(parser& p, ast_context& ctx, size_t& i) {
 // бинарные по приоритету (левоассоц.)
 static size_t math_parse_expr(parser& p, ast_context& ctx, size_t& i, int min_prec) {
   size_t lhs = math_parse_prefix(p, ctx, i);
+  if (lhs == 0) return 0;
   while (true) {
     op_info info;
     if (!math_op_at(p, ctx, i, op_fixity::binary, info)) break;
@@ -502,6 +523,10 @@ static size_t math_parse_expr(parser& p, ast_context& ctx, size_t& i, int min_pr
     // левоассоц.: следующий уровень строже (prec+1); правоассоц.: тот же уровень (prec)
     const int next_min = (info.assoc == op_assoc::right) ? info.precedence : info.precedence + 1;
     const size_t rhs = math_parse_expr(p, ctx, i, next_min);
+    if (rhs == 0) {
+      ctx.had_error = true;
+      return 0;
+    }
     const size_t count = lhs + rhs;
     ctx.rpn_output.push_back(ast_context::event_args{op, count});
     lhs = 1 + count;
@@ -516,6 +541,7 @@ static size_t math_parse_bracket(parser& p, ast_context& ctx, size_t& i) {
   while (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::row_begin) {
     i += 1;                                           // съели row_begin
     sum += math_parse_expr(p, ctx, i, 0);
+    if (ctx.had_error) return 0;
     n += 1;
     if (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::row_end) i += 1;
   }
@@ -531,14 +557,21 @@ std::tuple<event, error> make_math_ast(parser& p, ast_context& ctx, std::vector<
   if (ev.type == event_type::not_enought_data) return {ev, error{}};
 
   std::tuple<event, error> result{ev, error{}};
-  if (ctx.had_error) {                       // здесь had_error возможен только от row_too_long
+  if (ctx.had_error) {
     result = {ev, ast_row_error(ctx, ev)};
     ctx.op_stack.clear();
   } else if (!ctx.op_stack.empty()) {
     size_t i = 0;
     math_parse_expr(p, ctx, i, 0);
-    ctx.op_stack.clear();
-    reverse_rpn(ctx, ast_nodes);
+    if (!ctx.had_error && i != ctx.op_stack.size()) ctx.had_error = true;
+    if (ctx.had_error) {
+      result = {ev, ast_row_error(ctx, ev)};
+      ctx.op_stack.clear();
+      ctx.rpn_output.clear();
+    } else {
+      ctx.op_stack.clear();
+      reverse_rpn(ctx, ast_nodes);
+    }
   }
   if (ctx.output_full) result = {ev, error{error_type::err_output_capacity, ctx.row_start}};
   ast_reset_row(ctx);

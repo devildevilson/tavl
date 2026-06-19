@@ -127,6 +127,16 @@ TEST_CASE("serialize: strings — quotes only when needed") {
   CHECK(tavl_test::to_text(std::string("true")) == "\"true\"");      // зарезервированное -> кавычки
 }
 
+TEST_CASE("serialize: escaped strings round-trip") {
+  tavl::parser p;
+  p.add_default_operator();
+
+  struct text_doc { std::string s; };
+  const text_doc src{ "quote \" slash \\ newline\nunicode \xD0\xB6" };
+  const auto r = tavl_test::round_trip<tavl::sopts{ .full_escape = true }>(p, src);
+  CHECK(r.s == src.s);
+}
+
 TEST_CASE("serialize: optional/null") {
   CHECK(tavl_test::to_text(std::optional<int>{}) == "null");
   CHECK(tavl_test::to_text(std::optional<int>{42}) == "42");

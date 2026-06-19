@@ -27,6 +27,17 @@ TEST_CASE("tag_ast: a single token — a data row") {
   CHECK(tag_ast(p, "lonely") == "(tok 'lonely')");
 }
 
+TEST_CASE("tag_ast: malformed rows report err_misplaced_operator") {
+  tavl::parser p;
+  p.add_default_operator();
+
+  for (const std::string_view src : {"= value", "name =", "name = (value =)"}) {
+    const auto result = tavl_test::build_ast_result(p, src, tavl::make_tag_ast);
+    CHECK(result.error.type == tavl::error_type::err_misplaced_operator);
+    CHECK(result.nodes.empty());
+  }
+}
+
 TEST_CASE("tag_ast: child count via node_view") {
   tavl::parser p;
   p.add_default_operator();
@@ -39,4 +50,57 @@ TEST_CASE("tag_ast: child count via node_view") {
   const auto data = root.child(1);
   CHECK(data.type() == tavl::node_type::row);     // rhs тега ВСЕГДА row
   CHECK(data.size() == 1);                         // один элемент данных 'value'
+}
+
+TEST_CASE("tag_ast: byte-by-byte streaming yields the same AST as all at once") {
+  tavl::parser whole;
+  whole.add_default_operator();
+  const auto ref = tag_ast(whole, "name = (a = 1, b = 2)");
+
+  tavl::parser stream;
+  stream.add_default_operator();
+  const auto result = tavl_test::build_ast_streamed(stream, "name = (a = 1, b = 2)", tavl::make_tag_ast);
+  CHECK(result.error.type == tavl::error_type::no_error);
+  CHECK(tavl_test::ast_str(stream, result.nodes) == ref);
+}
+
+TEST_CASE("tag_ast: bounded_output — hitting ast_nodes.capacity() yields err_output_capacity") {
+  tavl::parser p;
+  p.add_default_operator();
+  const auto result = tavl_test::build_ast_result(p, "name = (a = 1, b = 2)", tavl::make_tag_ast);
+  REQUIRE(result.error.type == tavl::error_type::no_error);
+
+  p.clear(); p.flush("name = (a = 1, b = 2)"); p.finish();
+  tavl::event ev{}; tavl::error err;
+  do { std::tie(ev, err) = p.poll_event(); }
+  while (ev.type != tavl::event_type::row_begin && ev.type != tavl::event_type::eof);
+
+  std::vector<tavl::node> nodes;
+  nodes.reserve(2);
+  const size_t cap = nodes.capacity();
+  tavl::ast_context ctx;
+  ctx.bounded_output = true;
+  std::tie(ev, err) = tavl::make_tag_ast(p, ctx, nodes);
+  CHECK(err.type == tavl::error_type::err_output_capacity);
+  CHECK(nodes.empty());
+  CHECK(nodes.capacity() == cap);
+}
+
+TEST_CASE("tag_ast: bounded_output with sufficient capacity — no error") {
+  tavl::parser p;
+  p.add_default_operator();
+  p.clear(); p.flush("name = (a = 1, b = 2)"); p.finish();
+
+  tavl::event ev{}; tavl::error err;
+  do { std::tie(ev, err) = p.poll_event(); }
+  while (ev.type != tavl::event_type::row_begin && ev.type != tavl::event_type::eof);
+
+  std::vector<tavl::node> nodes;
+  nodes.reserve(32);
+  tavl::ast_context ctx;
+  ctx.bounded_output = true;
+  std::tie(ev, err) = tavl::make_tag_ast(p, ctx, nodes);
+  CHECK(err.type == tavl::error_type::no_error);
+  CHECK(tavl_test::ast_str(p, nodes) ==
+        "(pair '=' (tok 'name') (row 'name' (tuple '(' (pair '=' (tok 'a') (row '(' (tok '1'))) (pair '=' (tok 'b') (row '(' (tok '2'))))))");
 }

@@ -134,6 +134,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       if (const auto v = p.to_boolean(ev.token)) val = *v;
+      else ctx.push_diagnostic(error{error_type::err_expect_token_boolean, ev.token.span});
     }
   }
   else if constexpr (std::is_integral_v<T>) {
@@ -141,7 +142,13 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     if (ev.type == event_type::got_row_operator) { ct_next(p, ctx); ev = ct_peek(p, ctx); if (ctx.stalled) return; }
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
-      if (const auto v = p.to_int(ev.token)) val = static_cast<T>(*v);   // to_int принимает int+uint(hex/oct/bin)
+      if constexpr (std::is_signed_v<T>) {
+        if (const auto v = p.to_int(ev.token)) val = static_cast<T>(*v);   // to_int принимает int+uint(hex/oct/bin)
+        else ctx.push_diagnostic(error{error_type::err_expect_token_number_int, ev.token.span});
+      } else {
+        if (const auto v = p.to_uint(ev.token)) val = static_cast<T>(*v);
+        else ctx.push_diagnostic(error{error_type::err_expect_token_number_uint, ev.token.span});
+      }
     }
   }
   else if constexpr (std::is_floating_point_v<T>) {
@@ -150,6 +157,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       if (const auto v = p.to_float(ev.token)) val = static_cast<T>(*v);
+      else ctx.push_diagnostic(error{error_type::err_expect_token_number_float, ev.token.span});
     }
   }
   else if constexpr (ds_is_time_point<T>::value || ds_is_duration<T>::value) {

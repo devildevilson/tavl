@@ -33,6 +33,17 @@ TEST_CASE("pair_ast: a bracket group as an operand") {
   CHECK(pair_ast(p, "a = (b, c)") == "(pair '=' (tok 'a') (tuple '(' (tok 'b') (tok 'c')))");
 }
 
+TEST_CASE("pair_ast: malformed rows report err_misplaced_operator") {
+  tavl::parser p;
+  p.add_default_operator();
+
+  for (const std::string_view src : {"= value", "name =", "name = (value =)"}) {
+    const auto result = tavl_test::build_ast_result(p, src, tavl::make_pair_ast);
+    CHECK(result.error.type == tavl::error_type::err_misplaced_operator);
+    CHECK(result.nodes.empty());
+  }
+}
+
 TEST_CASE("pair_ast: child count via node_view") {
   tavl::parser p;
   p.add_default_operator();
@@ -46,6 +57,18 @@ TEST_CASE("pair_ast: child count via node_view") {
   CHECK(grp.type() == tavl::node_type::tuple);
   CHECK(grp.size() == 2);                         // b, c
   CHECK(grp.is_block());
+}
+
+TEST_CASE("pair_ast: byte-by-byte streaming yields the same AST as all at once") {
+  tavl::parser whole;
+  whole.add_default_operator();
+  const auto ref = pair_ast(whole, "a = (b, c)");
+
+  tavl::parser stream;
+  stream.add_default_operator();
+  const auto result = tavl_test::build_ast_streamed(stream, "a = (b, c)", tavl::make_pair_ast);
+  CHECK(result.error.type == tavl::error_type::no_error);
+  CHECK(tavl_test::ast_str(stream, result.nodes) == ref);
 }
 
 // прокрутить парсер до начала строки (как делает build_ast), затем отдать управление вызывающему

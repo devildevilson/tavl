@@ -127,6 +127,23 @@ TEST_CASE("deserialize: integers cross-cast (hex/oct/bin)") {
   CHECK(v.b == 8);
 }
 
+TEST_CASE("deserialize: unknown fields are skipped with nested values") {
+  tavl::parser p;
+  p.add_default_operator();
+  tavl::ct_context ctx;
+  const auto v = tavl_test::deserialize_all<rgb>(p,
+      "r = 1\n"
+      "unknown = { a = 1, b = [2, 3] }\n"
+      "g = 2\n"
+      "b = 3",
+      ctx);
+
+  CHECK(v.r == 1);
+  CHECK(v.g == 2);
+  CHECK(v.b == 3);
+  CHECK(ctx.diagnostics.empty());
+}
+
 TEST_CASE("deserialize: byte-by-byte streaming == all at once") {
   tavl::parser p;
   p.add_default_operator();
