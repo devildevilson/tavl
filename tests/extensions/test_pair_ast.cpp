@@ -1,4 +1,4 @@
-// Расширение: make_pair_ast.
+// Extension: make_pair_ast.
 
 #include <doctest/doctest.h>
 
@@ -51,7 +51,7 @@ TEST_CASE("pair_ast: child count via node_view") {
   const tavl::node_view root{nodes};
 
   CHECK(root.type() == tavl::node_type::pair);
-  CHECK(root.size() == 2);                       // lhs 'a' и группа (b, c)
+  CHECK(root.size() == 2);                       // lhs 'a' and group (b, c)
   CHECK(root.child(0).type() == tavl::node_type::token);
   const auto grp = root.child(1);
   CHECK(grp.type() == tavl::node_type::tuple);
@@ -71,7 +71,7 @@ TEST_CASE("pair_ast: byte-by-byte streaming yields the same AST as all at once")
   CHECK(tavl_test::ast_str(stream, result.nodes) == ref);
 }
 
-// прокрутить парсер до начала строки (как делает build_ast), затем отдать управление вызывающему
+// Advance parser to row_begin, like build_ast does, then hand control to the caller.
 static void to_row_begin(tavl::parser& p, std::string_view src) {
   p.clear(); p.flush(src); p.finish();
   tavl::event ev{}; tavl::error err;
@@ -82,17 +82,17 @@ static void to_row_begin(tavl::parser& p, std::string_view src) {
 TEST_CASE("pair_ast: bounded_output — hitting ast_nodes.capacity() yields err_output_capacity (atomically)") {
   tavl::parser p;
   p.add_default_operator();
-  to_row_begin(p, "a = (b, c, d, e)");          // дерево из ~7 узлов
+  to_row_begin(p, "a = (b, c, d, e)");          // tree with ~7 nodes
 
   std::vector<tavl::node> nodes;
-  nodes.reserve(2);                              // заведомо мало
+  nodes.reserve(2);                              // intentionally too small
   const size_t cap = nodes.capacity();
   tavl::ast_context ctx;
   ctx.bounded_output = true;
   const auto [ev, err] = tavl::make_pair_ast(p, ctx, nodes);
   CHECK(err.type == tavl::error_type::err_output_capacity);
-  CHECK(nodes.empty());                          // строка не добавлена целиком (атомарно)
-  CHECK(nodes.capacity() == cap);                // без реаллокации
+  CHECK(nodes.empty());                          // row was not appended partially
+  CHECK(nodes.capacity() == cap);                // no reallocation
 }
 
 TEST_CASE("pair_ast: bounded_output with sufficient capacity — no error, tree is correct") {

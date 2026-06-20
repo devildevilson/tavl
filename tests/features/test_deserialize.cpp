@@ -1,4 +1,4 @@
-// deserialize типов и контейнеров + round-trip с serialize.
+// deserialize for types and containers, plus serialize round-trip.
 
 #include <doctest/doctest.h>
 
@@ -24,7 +24,7 @@ struct bag {
 };
 struct assoc { std::map<std::string, int> m; std::set<int> s; };
 struct opt  { std::optional<int> a; std::optional<int> b; std::unique_ptr<int> c; };
-struct buf  { std::array<char, 8> name; };   // char[8] нельзя: reflect посчитал бы массив за 8 полей
+struct buf  { std::array<char, 8> name; };   // avoid char[8]: reflect would count it as 8 fields
 struct data { int a; int b; std::array<int, 3> c; };
 }
 
@@ -162,7 +162,7 @@ TEST_CASE("round-trip: serialize -> deserialize preserves values") {
   tavl::parser p;
   p.add_default_operator();
 
-  // round-trip — для структур (целевой кейс); голые контейнеры на верхнем уровне оборачиваем в структуру
+  // Round-trip target is structs; bare top-level containers are wrapped in structs.
   SUBCASE("associative containers via a struct") {
     const assoc a{ {{"a", 1}, {"b", 2}, {"c", 3}}, {1, 2, 3} };
     const auto r = tavl_test::round_trip(p, a);
@@ -179,7 +179,7 @@ TEST_CASE("round-trip: serialize -> deserialize preserves values") {
   }
 }
 
-// читает все экземпляры через deserialize_next (один и тот же цикл для single и list)
+// Read every instance through deserialize_next; the same loop handles single and list inputs.
 static std::vector<data> read_all(tavl::parser& p, std::string_view src) {
   p.clear();
   p.flush(src);
@@ -254,7 +254,7 @@ TEST_CASE("deserialize_next: various valid list forms") {
 }
 
 TEST_CASE("streaming: release_consumed keeps the input buffer bounded") {
-  // имитация сетевых пачек: по одному экземпляру за раз, между ними сбрасываем прочитанное
+  // Simulate network packets: read one instance at a time and release consumed input between them.
   const char* packets[] = {
     "(a=1,b=2,c=1 2 3),",
     "(a=2,b=3,c=2 3 4),",
@@ -275,7 +275,7 @@ TEST_CASE("streaming: release_consumed keeps the input buffer bounded") {
     while (tavl::deserialize_next(p, ctx, d)) {
       out.push_back(d);
       d = data{};
-      tavl::release_consumed(p, ctx);          // сбросить разобранное
+      tavl::release_consumed(p, ctx);          // release parsed input
     }
   }
 
@@ -283,12 +283,12 @@ TEST_CASE("streaming: release_consumed keeps the input buffer bounded") {
   CHECK(out[0].a == 1);
   CHECK(out[1].b == 3);
   CHECK(out[2].c == std::array<int, 3>{3, 4, 5});
-  // без release буфер дорос бы до всех ~54 байт; с release держится ~одной пачки
+  // Without release the buffer would grow to all ~54 bytes; with release it stays near one packet.
   CHECK(peak_buffer < 40);
 }
 
 TEST_CASE("single/list classification via parser::peek (doesn't consume the stream)") {
-  // первое СОДЕРЖАТЕЛЬНОЕ событие: блок-begin -> список, иначе -> одиночный
+  // First content event: block-begin means list, otherwise single record.
   const auto first_content = [](tavl::parser& pp) {
     while (true) {
       const auto e = pp.peek();
@@ -301,8 +301,8 @@ TEST_CASE("single/list classification via parser::peek (doesn't consume the stre
   p.add_default_operator();
 
   p.clear(); p.flush("a = 5\nb = 6"); p.finish();
-  CHECK(first_content(p) == tavl::event_type::got_row_identifier);   // одиночный
+  CHECK(first_content(p) == tavl::event_type::got_row_identifier);   // single
 
   p.clear(); p.flush("(a = 4),(a = 0)"); p.finish();
-  CHECK(first_content(p) == tavl::event_type::tuple_begin);          // список
+  CHECK(first_content(p) == tavl::event_type::tuple_begin);          // list
 }

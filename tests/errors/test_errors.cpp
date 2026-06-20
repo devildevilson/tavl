@@ -1,4 +1,4 @@
-// Обработка ошибок и misuse (парсер + deserialize-диагностика).
+// Error handling and misuse checks: parser errors plus deserialize diagnostics.
 
 #include <doctest/doctest.h>
 
@@ -24,10 +24,10 @@ bool has_diag(const tavl::ct_context& ctx, error_type t) {
   return false;
 }
 
-int g_check_calls = 0;   // счётчик срабатываний TAVL_CHECK (через перехват хендлером)
+int g_check_calls = 0;   // TAVL_CHECK call count, intercepted by a test handler
 }
 
-// ---------------- парсерные ошибки ----------------
+// ---------------- parser errors ----------------
 
 TEST_CASE("error: unclosed block -> critical err_bracket_missmatch") {
   tavl::parser p;
@@ -66,13 +66,13 @@ TEST_CASE("error: operator without an identifier in an object -> warn_expected_i
   CHECK(tavl_test::has_error(evs, error_type::warn_expected_identifier));
 }
 
-// ---------------- ошибки заполнения структур ----------------
+// ---------------- struct-fill errors ----------------
 
 TEST_CASE("error: unfilled fields -> warn_missing_field") {
   tavl::parser p;
   p.add_default_operator();
   tavl::ct_context ctx;
-  tavl_test::deserialize_all<rgb>(p, "r = 1", ctx);    // g, b отсутствуют
+  tavl_test::deserialize_all<rgb>(p, "r = 1", ctx);    // g and b are absent
   CHECK(has_diag(ctx, error_type::warn_missing_field));
 }
 
@@ -96,7 +96,7 @@ TEST_CASE("error: extra positional values -> err_too_many_values") {
   tavl::parser p;
   p.add_default_operator();
   tavl::ct_context ctx;
-  tavl_test::deserialize_all<rgb>(p, "1\n2\n3\n4", ctx);   // 4 значения на 3 поля
+  tavl_test::deserialize_all<rgb>(p, "1\n2\n3\n4", ctx);   // 4 values for 3 fields
   CHECK(has_diag(ctx, error_type::err_too_many_values));
 }
 
@@ -104,7 +104,7 @@ TEST_CASE("error: too-long string in a char buffer -> err_string_too_long") {
   tavl::parser p;
   p.add_default_operator();
   tavl::ct_context ctx;
-  tavl_test::deserialize_all<buf>(p, "s = toolong", ctx);  // 7 символов в char[4]
+  tavl_test::deserialize_all<buf>(p, "s = toolong", ctx);  // 7 chars into char[4]
   CHECK(has_diag(ctx, error_type::err_string_too_long));
 }
 
@@ -131,7 +131,7 @@ TEST_CASE("error: nested primitive type mismatches produce err_expect_token diag
   CHECK(has_diag(ctx, error_type::err_expect_token_number_float));
 }
 
-// ---------------- TAVL_CHECK: громкий провал конфигурации ----------------
+// ---------------- TAVL_CHECK: loud configuration failure ----------------
 
 TEST_CASE("misuse: invalid operator -> TAVL_CHECK (caught by a handler instead of abort)") {
   g_check_calls = 0;
@@ -139,20 +139,20 @@ TEST_CASE("misuse: invalid operator -> TAVL_CHECK (caught by a handler instead o
       [](const char*, const char*, int, const char*) { ++g_check_calls; });
 
   tavl::parser p;
-  p.add_operator("abc", tavl::op_fixity::binary, 1);          // не из operator_chars
+  p.add_operator("abc", tavl::op_fixity::binary, 1);          // not operator_chars
   CHECK(g_check_calls == 1);
 
-  p.add_litteral_operator("123", tavl::op_fixity::binary, 1); // не валидный идентификатор
+  p.add_litteral_operator("123", tavl::op_fixity::binary, 1); // not a valid identifier
   CHECK(g_check_calls == 2);
 
-  tavl::set_check_handler(prev);   // вернуть дефолт (stderr + abort)
+  tavl::set_check_handler(prev);   // restore default handler
 }
 
-// ---------------- лимиты памяти ----------------
+// ---------------- memory limits ----------------
 
 TEST_CASE("limit: nesting depth -> err_nesting_too_deep (critical)") {
   tavl::parser p;
-  const std::string src(tavl::limits::max_nesting + 5, '(');   // больше предела открывающих скобок
+  const std::string src(tavl::limits::max_nesting + 5, '(');   // more open brackets than the limit
   const auto evs = tavl_test::poll_all(p, src);
   CHECK(tavl_test::has_error(evs, error_type::err_nesting_too_deep));
   CHECK(tavl_test::has_critical(evs));

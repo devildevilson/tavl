@@ -25,8 +25,7 @@ void fail_check(const char* expr, const char* file, int line, const char* msg) {
   std::abort();
 }
 
-// единственная нешаблонная функция сериализатора (объявлена в serialize.h); живёт здесь, рядом
-// с detail-предикатами, которые использует
+// The only non-template serializer helper; kept here next to the predicates it uses.
 bool ser_string_needs_quote(std::string_view s) {
   if (s.empty()) return true;
   if (!detail::is_valid_identificator(s)) return true;
@@ -152,11 +151,11 @@ bool is_float_number(const std::string_view &str, double &val) {
 
   if (tmp.back() == 'f' || tmp.back() == 'F' || tmp.back() == 'd' || tmp.back() == 'D') {
     tmp.remove_suffix(1);
-    if (tmp.empty()) return false;   // был один суффикс ("d"/"f"/...) - это идентификатор, не число
+    if (tmp.empty()) return false;   // a lone suffix ("d"/"f"/...) is an identifier, not a number
   }
 
   while (!tmp.empty() && tmp[0] == '0') tmp.remove_prefix(1);
-  if (tmp.empty()) return false;     // одни нули - это целое (ловится is_dec_number раньше), не float
+  if (tmp.empty()) return false;     // all-zero input is an integer, handled by is_dec_number first
 
   if (tmp.size() >= helper_buffer_size-1) return false;
 
@@ -193,7 +192,7 @@ bool is_datetime(const std::string_view &str, iso_datetime& data) {
   bool has_date = false;
   bool has_time = false;
 
-  // дата (YYYY-MM-DD)
+  // Date: YYYY-MM-DD.
   if (tmp.size() >= 10 && tmp[4] == '-' && tmp[7] == '-') {
     if (!parse_int(tmp, data.y, 4)) return false;
     tmp.remove_prefix(1); // '-'
@@ -202,12 +201,12 @@ bool is_datetime(const std::string_view &str, iso_datetime& data) {
     if (!parse_int(tmp, data.d, 2)) return false;
     has_date = true;
 
-    if (tmp.empty()) return true; // Только дата
+    if (tmp.empty()) return true; // date only
     if (tmp[0] == 'T' || tmp[0] == '_') tmp.remove_prefix(1);
     else return false;
   }
 
-  // время (HH:MM:SS)
+  // Time: HH:MM:SS.
   if (tmp.size() >= 8 && tmp[2] == ':' && tmp[5] == ':') {
     if (!parse_int(tmp, data.hh, 2)) return false;
     tmp.remove_prefix(1); // ':'
@@ -215,22 +214,22 @@ bool is_datetime(const std::string_view &str, iso_datetime& data) {
     tmp.remove_prefix(1); // ':'
     if (!parse_int(tmp, data.ss, 2)) return false;
     has_time = true;
-  } else if (has_date) return false; // Ошибка, если после T нет времени
+  } else if (has_date) return false; // date separator must be followed by time
 
-  // ни даты, ни времени - не datetime (иначе "-3.14"/"+5" уехали бы в ветку часового пояса)
+  // Without a date or time this is not datetime; otherwise "-3.14"/"+5" would look like timezones.
   if (!has_date && !has_time) return false;
 
-  // миллисекунды (.XXXX)
+  // Fractional seconds.
   if (!tmp.empty() && tmp[0] == '.') {
     tmp.remove_prefix(1);
     size_t i = 0;
     while (i < tmp.size() && std::isdigit(tmp[i])) i++;
     if (i == 0) return false;
-    std::from_chars(tmp.data(), tmp.data() + i, data.ms); // Читаем сколько есть
+    std::from_chars(tmp.data(), tmp.data() + i, data.ms);
     tmp.remove_prefix(i);
   }
 
-  // часовой пояс (Z или +-HH:MM)
+  // Timezone: Z or +-HH:MM.
   if (tmp.empty()) return true;
   if (tmp[0] == 'Z') {
       data.is_utc = true;
@@ -250,7 +249,7 @@ bool is_datetime(const std::string_view &str, iso_datetime& data) {
   return tmp.empty();
 }
 
-// запись кодовой точки в UTF-8
+// Append a Unicode code point as UTF-8.
 static void append_utf8(std::string& out, uint32_t cp) {
   if (cp <= 0x7F) {
     out.append(1, static_cast<char>(cp));
@@ -305,7 +304,7 @@ void unescape_doublequote_string(const std::string_view& input, std::string& res
         if (ec == std::errc() && ptr == part.data()+part.size()) {
           i += (len + 1);
 
-          // обработка суррогатных пар (UTF-16)
+          // UTF-16 surrogate pairs.
           if (cp >= 0xD800 && cp <= 0xDBFF) {
             high_surrogate = cp;
             continue;
@@ -332,26 +331,25 @@ void unescape_doublequote_string(const std::string_view& input, std::string& res
         //case '\'': result.append(1, '\''); i += 1; continue; break;
       }
 
-      // числа?
     }
 
     result.append(1, input[i]);
   }
 }
 
-// escape_doublequote_minimal_to / escape_doublequote_full_to - теперь шаблоны в detail.h
-// (пишут через sink без промежуточных буферов).
+// escape_doublequote_minimal_to / escape_doublequote_full_to are templates in detail.h and write
+// through a sink without temporary buffers.
 
 std::chrono::milliseconds iso_datetime_to_unix_ms(const iso_datetime& dt) {
   using namespace std::chrono;
 
-  sys_days date{};   // эпоха по умолчанию, если в токене не было даты (только время)
+  sys_days date{};   // epoch default for time-only tokens
   if (dt.m >= 1 && dt.d >= 1) {
     const year_month_day ymd{year{dt.y}, month{static_cast<unsigned>(dt.m)}, day{static_cast<unsigned>(dt.d)}};
-    date = ymd;      // year_month_day -> sys_days (неявная конверсия)
+    date = ymd;      // year_month_day -> sys_days
   }
 
-  // местное время -> UTC: вычитаем смещение пояса (tz_offset_mm в минутах)
+  // Local time -> UTC: subtract timezone offset in minutes.
   return duration_cast<milliseconds>(date.time_since_epoch())
        + hours{dt.hh} + minutes{dt.mm} + seconds{dt.ss} + milliseconds{dt.ms}
        - minutes{dt.tz_offset_mm};
@@ -361,7 +359,7 @@ iso_datetime unix_ms_to_iso_datetime(std::chrono::milliseconds ms) {
   using namespace std::chrono;
 
   const days dd = floor<days>(ms);
-  milliseconds tod = ms - dd;                 // время суток в [0, сутки)
+  milliseconds tod = ms - dd;                 // time of day in [0, 24h)
   const year_month_day ymd{sys_days{dd}};
 
   iso_datetime out;

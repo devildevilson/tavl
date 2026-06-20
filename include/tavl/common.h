@@ -67,9 +67,8 @@
   X(eof) \
 
 
-// порядок важен: всё начиная с err_bracket_missmatch считается критическим
-// (см. error::is_critical). Новые warning'и добавлять до этой границы,
-// новые критические — после.
+// Ordering matters: error::is_critical() treats err_bracket_missmatch and everything after it
+// as critical. Add new warnings before that boundary and new critical errors after it.
 #define TAVL_ERROR_TYPE_LIST \
   X(no_error) \
   X(expected_identifier) \
@@ -93,14 +92,6 @@
   X(err_too_many_values) \
   X(err_string_too_long) \
 
-
-// критические ошибки - это отсутствие закрывающих скобок
-// остальные ошибки можно игнорировать
-// ошибки будут еще при заполнении си структуры
-
-// будут ли ошибки при превращении этого дела в строку? вряд ли
-// нужно ли городить сериализатор с апихой похожей на парсер? что то я сомневаюсь
-
 namespace tavl {
 
 enum class token_type {
@@ -118,7 +109,6 @@ enum class event_type {
 
   count
 
-  // ошибки + расширения
 };
 
 enum class error_type {
@@ -133,25 +123,23 @@ std::string_view to_string(const enum token_type type) noexcept;
 std::string_view to_string(const enum event_type type) noexcept;
 std::string_view to_string(const enum error_type type) noexcept;
 
-// Громкая проверка инвариантов / конфигурационного ввода, НЕЗАВИСИМАЯ от NDEBUG (в отличие от assert).
-// Малформный ТЕКСТ так не проверяют - он идёт через error/event. TAVL_CHECK для: ошибок конфигурации
-// (битый оператор в add_operator) и «этого не может быть» (недостижимые ветки). По умолчанию печатает
-// в stderr и std::abort() (библиотека -fno-exceptions). Встраивающий может подменить хендлер
-// (например, чтобы залогировать или - в тестах - перехватить без abort).
+// Loud invariant/configuration check, independent from NDEBUG. Malformed input text is reported
+// through event/error instead; TAVL_CHECK is for invalid configuration (for example, a bad
+// operator in add_operator) and unreachable internal paths. The default handler prints to stderr
+// and aborts because the library is built without exceptions; embedders may replace it.
 using check_handler = void(*)(const char* expr, const char* file, int line, const char* msg);
-check_handler set_check_handler(check_handler h);   // возвращает предыдущий; nullptr -> дефолт (stderr+abort)
+check_handler set_check_handler(check_handler h);   // returns the previous handler; nullptr restores default
 void fail_check(const char* expr, const char* file, int line, const char* msg);
 
 #define TAVL_CHECK(cond, msg) ((cond) ? (void)0 : ::tavl::fail_check(#cond, __FILE__, __LINE__, (msg)))
 
-// Жёсткие лимиты внутренних буферов (compile-time). При достижении - элемент не добавляется,
-// сигналим ошибкой (вход-зависимые: err_nesting_too_deep / err_row_too_long) либо обрезаем
-// (диагностики). >256 полей агрегата - ошибка КОМПИЛЯЦИИ (static_assert в deserialize).
+// Hard compile-time limits for internal buffers. On input-dependent limits we report an error
+// instead of growing; diagnostics are truncated. Aggregates with too many fields fail to compile.
 namespace limits {
-inline constexpr size_t max_nesting     = 64;    // parser::stack / ct_context::frames - глубина блоков
-inline constexpr size_t max_row_tokens  = 4096;  // ast_context op_stack/rpn_output/support - токенов в строке
-inline constexpr size_t max_fields      = 256;   // полей агрегата (ct_context::frame::seen - bitset)
-inline constexpr size_t max_diagnostics = 256;   // ct_context::diagnostics - дальше не пишем
+inline constexpr size_t max_nesting     = 64;    // parser::stack / ct_context::frames block depth
+inline constexpr size_t max_row_tokens  = 4096;  // ast_context op_stack/rpn_output/support tokens per row
+inline constexpr size_t max_fields      = 256;   // aggregate fields tracked by ct_context::frame::seen
+inline constexpr size_t max_diagnostics = 256;   // ct_context::diagnostics truncation point
 }
 
 enum class lexer_mode {
@@ -191,39 +179,37 @@ struct error {
   source_span span;
 
   inline bool no_error() const noexcept { return type == error_type::no_error; }
-  // критические ошибки (несовпадение скобок, неожиданный тип токена) -
-  // повод пропустить текущую строку; остальные не прерывают разбор
+  // Critical errors usually mean the current row/value should be skipped; warnings do not stop parsing.
   inline bool is_critical() const noexcept { return type >= error_type::err_bracket_missmatch; }
 };
 
-// перевод из и в unix timestamp
+// Calendar token payload, converted to/from Unix milliseconds by detail helpers.
 struct iso_datetime {
   int32_t y=0, m=0, d=0, hh=0, mm=0, ss=0, ms=0, tz_offset_mm=0;
   bool is_utc = false;
 };
 
-// фиксность оператора (для построения матдерева)
+// Operator fixity used by make_math_ast.
 enum class op_fixity {
-  prefix,    // унарный правоассоциативный префикс: -x, !x
-  binary,    // бинарный инфикс: a + b
-  postfix,   // унарный левоассоциативный постфикс: x!
+  prefix,    // unary right-associative prefix: -x, !x
+  binary,    // binary infix: a + b
+  postfix,   // unary left-associative postfix: x!
 };
 
-// ассоциативность (значима для бинарных: a-b-c -> (a-b)-c слева, a=b=c -> a=(b=c) справа).
-// Унарные определяются фиксностью (prefix=правая, postfix=левая).
+// Associativity for binary operators. Unary associativity is implied by fixity.
 enum class op_assoc {
   left,
   right,
 };
 
-// метаданные зарегистрированного оператора (нужны make_math_ast)
+// Metadata for a registered operator; make_math_ast reads it from the parser.
 struct op_info {
   op_fixity fixity = op_fixity::binary;
   int precedence = 0;
   op_assoc assoc = op_assoc::left;
 };
 
-// --- AST: узел дерева (строится расширениями поверх потока событий, см. ext.h) ---
+// --- AST node type, built by extensions over the event stream (see ext.h) ---
 enum class node_type {
   invalid,
 
@@ -235,12 +221,12 @@ enum class node_type {
   token
 };
 
-// Узел плоского AST. child_count - ФУТПРИНТ: число слотов под всех потомков в плоском массиве
-// (поддерево узла занимает 1 + child_count слотов). Прямые дети идут подряд начиная со слота +1,
-// шаг до следующего ребёнка = child.child_count + 1. Удобный обход - через node_view (ext.h).
+// Flat AST node. child_count is the subtree footprint: the number of descendant slots in the
+// flat array. A subtree occupies 1 + child_count nodes. Direct children start at slot +1 and the
+// next child is reached by child.child_count + 1. node_view in ext.h provides traversal helpers.
 struct node {
   enum node_type type = node_type::invalid;
-  struct token token;   // для pair - оператор; для блоков - открывающая скобка; для token - сам токен
+  struct token token;   // pair: operator; blocks: opening bracket; token: the token itself
   size_t child_count = 0;
 };
 

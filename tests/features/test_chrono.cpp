@@ -27,10 +27,10 @@ TEST_CASE("chrono: serialize uses the '_' separator by default") {
   p.add_default_operator();
 
   const auto v = tavl_test::deserialize_all<times>(p,
-      "t = 2026-06-14T12:30:00\nd = 1970-01-01T00:00:01.500");   // на входе допустим и 'T', и '_'
+      "t = 2026-06-14T12:30:00\nd = 1970-01-01T00:00:01.500");   // both 'T' and '_' are accepted on input
 
   std::string out;
-  tavl::serialize(v, out);                                       // дефолт -> '_'
+  tavl::serialize(v, out);                                       // default -> '_'
   CHECK(out == "t = 2026-06-14_12:30:00\nd = 1970-01-01_00:00:01.500");
 }
 
@@ -42,7 +42,7 @@ TEST_CASE("chrono: the iso_datetime flag gives the 'T' separator") {
       "t = 2026-06-14_12:30:00\nd = 1970-01-01_00:00:01.500");
 
   std::string out;
-  tavl::serialize<tavl::sopts{ .iso_datetime = true }>(v, out);  // строгий ISO -> 'T'
+  tavl::serialize<tavl::sopts{ .iso_datetime = true }>(v, out);  // strict ISO-looking output -> 'T'
   CHECK(out == "t = 2026-06-14T12:30:00\nd = 1970-01-01T00:00:01.500");
 }
 

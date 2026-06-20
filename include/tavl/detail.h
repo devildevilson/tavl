@@ -58,16 +58,16 @@ bool is_float_number(const std::string_view& str, double& val);
 bool parse_int(std::string_view& s, int32_t& out, const size_t n);
 bool is_datetime(const std::string_view& str, iso_datetime& data);
 
-// обработка содержимого строкового литерала (без кавычек) в готовую строку:
-// одинарные кавычки - почти без escape, двойные - стандартные escape + \u\U unicode
+// Convert string literal contents (without quotes) into the final string:
+// single quotes have minimal escaping, double quotes support standard escapes and \u/\U Unicode.
 void unescape_singlequote_string(const std::string_view& input, std::string& result);
 void unescape_doublequote_string(const std::string_view& input, std::string& result);
 
-// escape для сериализации, БЕЗ временных буферов: каждый выходной байт отдаётся в put(char)->bool.
-// put возвращает false, чтобы остановить (напр. упор в capacity); тогда escape_*_to вернёт false.
-// Так serialize пишет сразу в out через bounded-aware ser_put, не создавая промежуточных строк.
+// Serialization escape helpers without temporary buffers: each output byte is sent to put(char)->bool.
+// put may return false to stop (for example, bounded output reached capacity), and escape_*_to
+// propagates that false. serialize.h uses this to write straight into the destination string.
 
-// минимальный: экранирует ТОЛЬКО \ и " (строки многострочны, управляющие пишем как есть).
+// Minimal escape: only backslash and double quote. Strings are multiline, so control chars stay as-is.
 template <typename Put>
 bool escape_doublequote_minimal_to(std::string_view input, Put&& put) {
   for (const char c : input) {
@@ -77,8 +77,8 @@ bool escape_doublequote_minimal_to(std::string_view input, Put&& put) {
   return true;
 }
 
-// полный: \ " + управляющие (\n \r \t \a \b \f \v, прочие <0x20 -> \u00XX) + ЮНИКОД (байты >=0x80
-// декодятся из UTF-8 в \uXXXX / \UXXXXXXXX). Чистый ASCII; читается обратно unescape_doublequote_string.
+// Full escape: backslash/quote, control chars, and Unicode. UTF-8 bytes >= 0x80 are decoded into
+// \uXXXX / \UXXXXXXXX so the result is ASCII and round-trips through unescape_doublequote_string.
 template <typename Put>
 bool escape_doublequote_full_to(std::string_view input, Put&& put) {
   const auto emit_u = [&put](uint32_t cp) -> bool {
@@ -114,7 +114,7 @@ bool escape_doublequote_full_to(std::string_view input, Put&& put) {
       continue;
     }
 
-    uint32_t cp = 0;                                  // multibyte UTF-8 -> кодовая точка
+    uint32_t cp = 0;                                  // multibyte UTF-8 -> code point
     int len = 0;
     if ((c & 0xE0) == 0xC0)      { cp = c & 0x1F; len = 2; }
     else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; len = 3; }
@@ -126,20 +126,20 @@ bool escape_doublequote_full_to(std::string_view input, Put&& put) {
       if ((cc & 0xC0) != 0x80) { ok = false; break; }
       cp = (cp << 6) | (cc & 0x3F);
     }
-    if (!ok) { if (!emit_u(c)) return false; i += 1; continue; }  // битый ведущий/оборванный
+    if (!ok) { if (!emit_u(c)) return false; i += 1; continue; }  // malformed/truncated UTF-8
     if (!emit_u(cp)) return false;
     i += static_cast<size_t>(len);
   }
   return true;
 }
 
-// конвертация iso_datetime <-> Unix-время в миллисекундах (UTC; учитывает tz_offset). Календарь -
-// через std::chrono (C++20). Для chrono-десериализации/сериализации (см. deserialize.h/serialize.h).
+// Convert iso_datetime <-> Unix milliseconds (UTC, honoring tz_offset) via C++20 chrono.
+// Used by chrono deserialize/serialize support.
 std::chrono::milliseconds iso_datetime_to_unix_ms(const iso_datetime& dt);
 iso_datetime unix_ms_to_iso_datetime(std::chrono::milliseconds ms);
-// рендер iso_datetime в токен YYYY-MM-DD<sep>HH:MM:SS[.mmm] (UTC, без tz-суффикса) в буфер buf (cap байт),
-// возвращает длину. Датавремя ограниченной длины -> хватает char buf[40] (без std::string).
-// sep - разделитель даты и времени: '_' (дефолт формата) или 'T' (строгий ISO).
+// Render iso_datetime as YYYY-MM-DD<sep>HH:MM:SS[.mmm] (UTC, no timezone suffix) into buf and
+// return the length. Datetimes are bounded, so char buf[40] is enough and no std::string is needed.
+// sep is '_' by default or 'T' for strict ISO-looking output.
 size_t format_iso_datetime(const iso_datetime& dt, char* buf, size_t cap, char sep = '_');
 
 }

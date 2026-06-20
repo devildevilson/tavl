@@ -27,14 +27,14 @@ namespace tavl {
 struct ast_context {
   struct event_args { struct event event; size_t counter = 0; };
 
-  // состояние разбора ТЕКУЩЕЙ строки - сбрасывается по её завершении
+  // Current-row parser state; reset after each completed row.
   size_t nest_counter = 0;
   bool expect_operand = true;
   bool got_start = false;
   bool had_error = false;
-  bool row_too_long = false;     // op_stack уперся в limits::max_row_tokens
-  bool bounded_output = false;   // capacity-aware: уважать ast_nodes.capacity() (выставляет вызывающий)
-  bool output_full = false;      // строка не влезла в ast_nodes.capacity() -> err_output_capacity
+  bool row_too_long = false;     // op_stack reached limits::max_row_tokens
+  bool bounded_output = false;   // capacity-aware mode set by the caller
+  bool output_full = false;      // row did not fit into ast_nodes.capacity()
   source_span row_start{};
 
   std::vector<event_args> op_stack;
@@ -44,10 +44,9 @@ struct ast_context {
 
 std::tuple<event, error> ignore_to_row_end(parser& p);
 
-// Разделитель документов в одном потоке: строка-комментарий ровно "//---" (визуальный, как YAML ---,
-// но это КОММЕНТ - поэтому "//---" внутри строки не спутается, и сам по себе он безвреден для формата).
-// is_document_separator проверяет токен события got_comment; при true - конец документа: вызвать finish(),
-// дочитать события до eof, затем clear() и продолжить кормить остаток потока новому документу.
+// Document separator in one stream: a line comment exactly equal to "//---". It is a comment, so it
+// cannot be confused with the same bytes inside a string and is harmless to parsers that ignore it.
+// On a separator, finish and drain the current document, clear the parser, then feed the next one.
 inline constexpr std::string_view document_separator = "//---";
 bool is_document_separator(const parser& p, const token& t);
 
@@ -56,7 +55,7 @@ std::tuple<event, error> make_tag_ast(parser& p, ast_context& ctx, std::vector<n
 std::tuple<event, error> make_math_ast(parser& p, ast_context& ctx, std::vector<node>& ast_nodes);
 
 struct node_view {
-  std::span<const node> nodes;   // nodes[0] - корень поддерева; nodes[1..] - потомки (плоско)
+  std::span<const node> nodes;   // nodes[0] is the subtree root; nodes[1..] are flat descendants
 
   const node& root() const;
   node_type type() const;
@@ -77,7 +76,7 @@ struct node_view {
   iterator begin() const;
   iterator end() const;
 
-  size_t size() const;                // число ПРЯМЫХ детей (не футпринт)
+  size_t size() const;                // number of direct children, not footprint
   node_view child(size_t k) const;
 
   template <typename Fn>

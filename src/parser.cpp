@@ -9,28 +9,28 @@ std::string_view parser::content(const source_span& span) const {
   return storage.resolve({span.offset, span.size});
 }
 
-// Приоритеты как в C++: ЧЕМ БОЛЬШЕ ЧИСЛО, ТЕМ КРЕПЧЕ связывает (обратно уровням cppreference).
-// Дефолты: '=' (присваивание, самый слабый), сравнения; математику пользователь добавит сам.
+// C++-like precedence: higher number binds tighter. Defaults include assignment and comparisons;
+// math operators are opt-in.
 void parser::add_default_operator() {
-  add_operator("=", op_fixity::binary, 1, op_assoc::right);   // присваивание правоассоциативно
+  add_operator("=", op_fixity::binary, 1, op_assoc::right);   // right-associative assignment
 }
 
 void parser::add_additional_default_operators() {
-  add_operator(">",  op_fixity::binary, 10);  // отношение  (C++ <, >, <=, >=)
+  add_operator(">",  op_fixity::binary, 10);  // relational (C++ <, >, <=, >=)
   add_operator("<",  op_fixity::binary, 10);
   add_operator(">=", op_fixity::binary, 10);
   add_operator("<=", op_fixity::binary, 10);
-  add_operator("<>", op_fixity::binary, 9);   // неравенство (C++ == / != - слабее отношения)
+  add_operator("<>", op_fixity::binary, 9);   // equality/inequality, weaker than relational
   add_operator("==", op_fixity::binary, 9);
 }
 
 void parser::add_math_default_operators() {
   clear_operators();
-  add_default_operator();              // '=' правоассоц. (присваивание)
+  add_default_operator();
   add_additional_default_operators();
 
-  // все бинарные C++-операторы ниже левоассоциативны (дефолт op_assoc::left);
-  // правоассоц. только присваивание ('=') и унарные префиксы (фиксность сама задаёт правую сторону).
+  // The binary C++ operators below are left-associative by default; assignment is right-associative.
+  // Unary prefix operators get their direction from fixity.
   add_operator("||",  op_fixity::binary, 4);
   add_operator("&&",  op_fixity::binary, 5);
   add_operator("|",   op_fixity::binary, 6);
@@ -122,20 +122,20 @@ static event_type end_event_for(const block_type type) noexcept {
   return event_type::invalid;
 }
 
-// кладёт событие в очередь вместе с сопутствующей ошибкой (no_error если чисто)
+// Queue an event with its attached error, if any.
 void parser::emit(const event& ev, error err) {
   events.push_back({ev, err});
 }
 
-// куда указывает span предупреждения о строке: идентификатор, иначе оператор, иначе сам токен
+// Diagnostic span for a row: identifier first, then operator, then fallback token.
 source_span parser::row_span(const block_frame& f, const token& fallback) const {
   if (f.has_identifier()) return f.identifier.span;
   if (f.op.exists())      return f.op.span;
   return fallback.span;
 }
 
-// эмитит отложенные id/op текущей строки и закрывает её событием row_end;
-// object-строку без значения помечает предупреждением
+// Emit the delayed id/operator for the current row and close it with row_end.
+// Object-like rows without values are reported as warnings.
 void parser::close_row(const token& end_tok) {
   auto& f = stack.back();
   if (!f.has_row()) return;
@@ -147,22 +147,22 @@ void parser::close_row(const token& end_tok) {
 
   if (!f.has_value()) {
     if (f.row_mode == parse_mode::object_like) {
-      // в object ключ обязателен - это идентификатор/оператор строки
+      // In an object, a lone id/operator is still the row key/operator.
       if (f.has_identifier()) emit(event{event_type::got_row_identifier, f.identifier});
       if (f.op.exists())      emit(event{event_type::got_row_operator, f.op});
     } else if (f.row_mode == parse_mode::tuple_like) {
-      // в tuple одинокий идентификатор/оператор без значения - это просто данные
+      // In a tuple, a lone id/operator without a value is just data.
       if (f.has_identifier()) emit(event{event_type::got_token, f.identifier});
       if (f.op.exists())      emit(event{event_type::got_token, f.op});
     }
   }
 
   emit(event{event_type::row_end, end_tok}, row_err);
-  f.new_row();   // строка закрыта - делаем close_row идемпотентным
+  f.new_row();   // make close_row idempotent
 }
 
-// принудительно закрывает незакрытые вложенные блоки до блока типа target;
-// на каждый выкинутый блок эмитит его *_end с ошибкой на открывающую скобку
+// Force-close unmatched nested blocks until target is found; each discarded block emits *_end with
+// err_bracket_missmatch pointing at its opening bracket.
 void parser::close_unmatched(block_type target, const token& closer) {
   while (stack.size() > 1 && stack.back().type != target) {
     close_row(closer);
@@ -173,8 +173,8 @@ void parser::close_unmatched(block_type target, const token& closer) {
   }
 }
 
-// закрывает блок типа target, открытый скобкой и закрываемый closer (end_ev - его событие конца):
-// штатно если парный блок найден, иначе помечает closer как лишнюю закрывающую скобку
+// Close a target block with closer. If no matching opener exists, closer itself is reported as the
+// extra closing bracket.
 void parser::close_block(block_type target, event_type end_ev, const token& closer) {
   close_row(closer);
   close_unmatched(target, closer);
@@ -185,21 +185,21 @@ void parser::close_block(block_type target, event_type end_ev, const token& clos
     stack.pop_back();
     emit(event{end_ev, closer});
   }
-  // закрытый блок может быть значением в строке родителя
+  // A closed block counts as a value in the parent row.
   stack.back().last_value = closer;
 }
 
-// открывает блок типа bt скобкой c (begin_ev - его событие начала). Общая логика для (){}[]:
-// флаш отложенных id/оператора родителя + разрешение parse_mode (с учётом подмены) + push кадра.
+// Open a block of type bt. Shared logic for (){}[]: flush delayed parent id/operator, resolve
+// parse_mode (including overrides), then push a new stack frame.
 void parser::open_block(const token& c, block_type bt, event_type begin_ev) {
-  // жёсткий лимит вложенности: глубже не идём - сигналим критической ошибкой и НЕ пушим кадр
+  // Hard nesting limit: emit a critical error and do not push a frame.
   if (stack.size() >= limits::max_nesting) {
     emit(event{begin_ev, c}, error{error_type::err_nesting_too_deep, c.span});
     return;
   }
 
   error id_err{};
-  // на открывающей скобке проверяем, что object-строка имеет ключ
+  // At block start, object-like rows must already have a key.
   if (stack.back().row_mode == parse_mode::object_like &&
       !stack.back().has_value() && !stack.back().has_identifier()) {
     id_err = error{error_type::warn_expected_identifier, c.span};
@@ -207,15 +207,15 @@ void parser::open_block(const token& c, block_type bt, event_type begin_ev) {
 
   if (!stack.back().has_row()) emit(event{event_type::row_begin, c});
 
-  // блок становится значением строки - сбрасываем отложенные id/оператор
+  // The block becomes the row value; emit any delayed id/operator before it.
   if ((stack.back().row_mode == parse_mode::object_like ||
        stack.back().row_mode == parse_mode::tuple_like) && !stack.back().has_value()) {
     if (stack.back().has_identifier()) emit(event{event_type::got_row_identifier, stack.back().identifier});
     if (stack.back().op.exists()) emit(event{event_type::got_row_operator, stack.back().op});
   }
 
-  // режим блока: отложенная подмена (-> блок+потомки), иначе наследованная карта родителя, иначе дефолт скобки.
-  // подмена потребляется первым же открытым блоком; карта (eff) кладётся в кадр для наследования вглубь.
+  // Block mode: pending override applies to this block and its descendants, otherwise inherit the
+  // parent's mode map, otherwise use the bracket default. The override is consumed by the next block.
   const block_modes eff = pending_modes.active ? pending_modes : stack.back().modes;
   pending_modes = block_modes{};
   parse_mode pm = (bt == block_type::object) ? parse_mode::object_like
@@ -233,8 +233,8 @@ void parser::open_block(const token& c, block_type bt, event_type begin_ev) {
   emit(event{begin_ev, c}, id_err);
 }
 
-// Наполняет очередь events: токенизирует ввод (lexer.lex) и диспетчеризует токены по типу,
-// накапливая состояние строки в верхнем кадре stack, пока не наберётся хотя бы одно событие.
+// Fill the event queue: tokenize input and dispatch tokens by type, keeping row state in the top
+// stack frame until at least one event is available.
 void parser::fill_events() {
   if (stack.empty() && events.empty()) {
     emit(event{event_type::eof, token{}});
@@ -243,8 +243,8 @@ void parser::fill_events() {
   while (events.empty()) {
     const auto c = lexer.lex(storage);
 
-    // not_enought_data НЕ кэшируем в очереди: иначе peek() залипнет на нём и не перелексит после долива.
-    // Выходим с пустой очередью; poll_event/peek синтезируют not_enought_data сами.
+    // Do not cache not_enought_data in the queue; otherwise peek() would stick on it and never
+    // re-lex after more input arrives. Leave the queue empty and synthesize it in poll_event/peek.
     if (c.type == token_type::not_enought_data) break;
 
     switch (c.type) {
@@ -253,7 +253,7 @@ void parser::fill_events() {
         case token_type::close_bracket: close_block(block_type::array,  event_type::array_end,  c); break;
 
         case token_type::comma:
-          // пустая строка перед запятой: синтезируем пустую строку и помечаем её
+          // Empty row before a comma: synthesize empty_row and warn.
           if (!stack.back().has_row()) {
             emit(event{event_type::empty_row, c}, error{error_type::warn_empty_row, c.span});
             break;
@@ -269,7 +269,7 @@ void parser::fill_events() {
         case token_type::open_brace:   open_block(c, block_type::object, event_type::object_begin); break;
         case token_type::open_bracket: open_block(c, block_type::array,  event_type::array_begin);  break;
 
-        // здесь достаточно проверить наличие идентификатора и отсутствие значения
+        // An operator after the first non-operator token becomes the delayed row operator.
         case token_type::op: {
           if (!stack.back().has_row()) {
             emit(event{event_type::row_begin, c});
@@ -295,7 +295,7 @@ void parser::fill_events() {
             id_err = error{error_type::warn_expected_identifier, c.span};
           }
 
-          // добавляем отложенные идентификатор и оператор
+          // Flush delayed identifier/operator before emitting data.
           if (
             (stack.back().row_mode == parse_mode::object_like ||
              stack.back().row_mode == parse_mode::tuple_like) &&
@@ -310,13 +310,11 @@ void parser::fill_events() {
             }
           }
 
-          // это просто какой то идентификатор
           stack.back().last_value = c;
           emit(event{event_type::got_token, c}, id_err);
           break;
         }
         
-        // тут простые проверки видимо без ошибок
         case token_type::unrecognized:
         case token_type::null:
         case token_type::boolean:
@@ -331,9 +329,9 @@ void parser::fill_events() {
             emit(event{event_type::row_begin, c});
           }
 
-          // первый токен-неоператор строки -> идентификатор. НО только если значения ещё не было:
-          // если строка началась с оператора (унарный префикс, напр. "-a"), оператор уже стал
-          // данными (got_token), и последующие токены тоже данные, а не идентификатор.
+          // The first non-operator token in a row becomes an identifier, but only before any value
+          // was emitted. If a row starts with an operator (for example unary "-a"), that operator is
+          // already data, so following tokens are data too.
           if (
             (stack.back().row_mode == parse_mode::object_like ||
              stack.back().row_mode == parse_mode::tuple_like) &&
@@ -344,7 +342,7 @@ void parser::fill_events() {
             break;
           }
 
-          // добавляем отложенные идентификатор и оператор
+          // Flush delayed identifier/operator before emitting data.
           if (
             (stack.back().row_mode == parse_mode::object_like ||
              stack.back().row_mode == parse_mode::tuple_like) && 
@@ -364,8 +362,8 @@ void parser::fill_events() {
           break;
 
         case token_type::eof:
-          // конец ввода: закрываем висящую строку и все незакрытые блоки,
-          // каждый блок - со ссылкой на его открывающую скобку
+          // End of input: close the pending row and every unclosed block, reporting each block at
+          // its opening bracket.
           close_row(c);
           while (stack.size() > 1) {
             const auto f = stack.back();
@@ -383,17 +381,17 @@ void parser::fill_events() {
           emit({event_type::got_comment, c});
           break;
 
-        // not_enought_data перехвачен до switch (не кэшируем); здесь недостижим, кейс - для -Wswitch
+        // Handled before the switch; kept for -Wswitch.
         case token_type::not_enought_data: break;
 
-        // лексер не отдаёт invalid (битый текст -> unrecognized), count - sentinel: оба недостижимы
+        // The lexer should not emit invalid (bad text is unrecognized); count is a sentinel.
         case token_type::invalid:
         case token_type::count: TAVL_CHECK(false, "lexer returned invalid/count token"); break;
     }
   }
 }
 
-// Отдаёт следующее событие из очереди (с сопутствующей ошибкой), сняв его с очереди.
+// Pop the next queued event and its attached error.
 std::tuple<event, error> parser::poll_event() {
   fill_events();
   if (!events.empty()) {
@@ -404,16 +402,15 @@ std::tuple<event, error> parser::poll_event() {
   return {event{event_type::not_enought_data, {}}, error{}};
 }
 
-// Не-снимающий lookahead: следующее событие без снятия с очереди (для классификации потока).
+// Non-consuming lookahead, used for stream classification.
 event parser::peek() {
   fill_events();
   if (!events.empty()) return events.front().event;
   return event{event_type::not_enought_data, {}};
 }
 
-// отправляем метку что инпута больше не будет
-// но после этого парсер все еще может отдать несколько событий 
-// (как минимум закрыть структуры + завершить строку + сгенерировать ошибки)
+// Mark the input as complete. The parser may still emit several events afterwards: pending rows,
+// synthetic block endings, diagnostics, then eof.
 void parser::finish() {
   lexer.finish();
 }
@@ -436,7 +433,7 @@ std::string parser::to_string(const token& t) const {
     return str;
   }
 
-  // doublequote_string - стандартные escape + \u/\U unicode
+  // doublequote_string: standard escapes plus \u/\U Unicode.
   cont.remove_prefix(1);
   if (cont.back() == '\"') cont.remove_suffix(1);
 

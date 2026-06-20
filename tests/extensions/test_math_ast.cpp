@@ -1,4 +1,4 @@
-// Расширение: make_math_ast + обход node_view.
+// Extension: make_math_ast plus node_view traversal.
 
 #include <doctest/doctest.h>
 
@@ -36,7 +36,7 @@ TEST_CASE("math_ast: unary prefix -> a node with a single child") {
 
   const auto nodes = tavl_test::build_ast(p, "-a", tavl::make_math_ast);
   const tavl::node_view root{nodes};
-  CHECK(root.size() == 1);          // ровно один ребёнок (операнд)
+  CHECK(root.size() == 1);          // exactly one child: the operand
   CHECK(root.footprint() == 1);
 }
 
@@ -131,8 +131,8 @@ TEST_CASE("node_view: AST traversal (size/footprint/is_block/for_each/child/next
 
   CHECK(root.type() == tavl::node_type::pair);   // '+'
   CHECK(root.is_block());
-  CHECK(root.size() == 2);          // прямых детей: a и (b * c)
-  CHECK(root.footprint() == 4);     // слотов под потомков: a(1) + (b*c)(3)
+  CHECK(root.size() == 2);          // direct children: a and (b * c)
+  CHECK(root.footprint() == 4);     // descendant slots: a(1) + (b*c)(3)
 
   const auto lhs = root.child(0);   // 'a'
   CHECK(lhs.type() == tavl::node_type::token);
@@ -148,12 +148,12 @@ TEST_CASE("node_view: AST traversal (size/footprint/is_block/for_each/child/next
   root.for_each([&](tavl::node_view) { ++n; });
   CHECK(n == 2);
 
-  // прямой ребёнок начинается в [1]; 'a' занимает 1 слот -> следующий ребёнок в [2]
+  // Direct child starts at [1]; 'a' occupies one slot, so the next child starts at [2].
   CHECK(tavl::next_child_index(root.nodes, 1) == 2);
 }
 
 TEST_CASE("node_view: an empty span is safe (defaults invalid/token{})") {
-  const tavl::node_view nv{};   // пустой span
+  const tavl::node_view nv{};   // empty span
   CHECK(nv.empty());
   CHECK(nv.type() == tavl::node_type::invalid);
   CHECK(nv.token().type == tavl::token_type::invalid);

@@ -1,4 +1,4 @@
-// serialize: текст для разных опций + крупная структура.
+// serialize: text for different options plus a large struct.
 
 #include <doctest/doctest.h>
 
@@ -19,7 +19,7 @@ namespace {
 struct vec3 { int x, y, z; };
 struct doc  { std::string name; vec3 v; std::vector<int> nums; };
 
-// крупная структура со ВСЕМИ поддерживаемыми категориями типов
+// Large struct covering every supported type category.
 struct inner { int a; std::string b; };
 struct mega {
   bool flag;
@@ -124,7 +124,7 @@ TEST_CASE("serialize: wrap_at — wraps a sequence at N per line") {
 TEST_CASE("serialize: strings — quotes only when needed") {
   CHECK(tavl_test::to_text(std::string("plain_id")) == "plain_id");
   CHECK(tavl_test::to_text(std::string("has space")) == "\"has space\"");
-  CHECK(tavl_test::to_text(std::string("true")) == "\"true\"");      // зарезервированное -> кавычки
+  CHECK(tavl_test::to_text(std::string("true")) == "\"true\"");      // reserved word -> quotes
 }
 
 TEST_CASE("serialize: escaped strings round-trip") {
@@ -145,12 +145,12 @@ TEST_CASE("serialize: optional/null") {
 TEST_CASE("serialize: bounded — hitting capacity() yields false without overflowing") {
   const doc d{ "hi", {1, 2, 3}, {4, 5, 6} };
   std::string out;
-  out.reserve(20);                       // заведомо меньше полного вывода (~36)
+  out.reserve(20);                       // intentionally below full output size (~36)
   const size_t cap = out.capacity();
   const bool ok = tavl::serialize<tavl::sopts{ .prettify = false, .bounded = true }>(d, out);
-  CHECK_FALSE(ok);                       // не влезло -> false
-  CHECK(out.size() <= cap);              // не вышли за reserve
-  CHECK(out.capacity() == cap);          // capacity не вырос (без реаллокации)
+  CHECK_FALSE(ok);                       // did not fit -> false
+  CHECK(out.size() <= cap);              // did not exceed reserve
+  CHECK(out.capacity() == cap);          // capacity did not grow
 }
 
 TEST_CASE("serialize: bounded with sufficient capacity — true and full output") {

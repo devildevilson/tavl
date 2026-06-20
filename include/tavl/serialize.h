@@ -46,9 +46,8 @@
 
 namespace tavl {
 
-// СТРУКТУРНЫЙ строковый тип для NTTP: публичный буфер фиксированной ёмкости + длина.
-// std::string_view/std::string нельзя класть в `template <auto Opts>` (их поля private => тип не
-// структурный); поэтому строки в опциях храним здесь (публичные поля => структурный, годен для NTTP).
+// Structural string type for NTTP options: public fixed-capacity buffer + length. std::string_view
+// and std::string are not structural types, so option strings live here.
 template <size_t Cap = 32>
 struct ser_str {
   char data[Cap]{};
@@ -63,7 +62,7 @@ struct ser_str {
 struct sopts {
   ser_str<> int_fmt   = "{}";       // integer format (std::format spec); empty -> to_chars
   ser_str<> float_fmt = "{}";       // float format; empty -> to_chars (shortest round-trip)
-  bool serialize_cstr   = false;   // serialize std::string_view / const char* / char* (ASYMMETRIC - deserialize can't read them back); off by default so serialize mirrors deserialize
+  bool serialize_cstr   = false;   // serialize std::string_view / const char* / char* (asymmetric)
   bool follow_pointers  = false;   // dereference raw pointers (ASYMMETRIC - not read back)
 
   bool prettify = true;             // line breaks + indentation; false - compact, on a single line
@@ -77,8 +76,9 @@ struct sopts {
   bool bounded = false;             // capacity-aware: do not grow past out.capacity(), stop at the boundary (serialize -> false)
 };
 
-// serialize возвращает true, если значение записано полностью; false - при bounded и упоре в out.capacity()
-// (вывод обрезан на границе append). SIZE_MAX как depth = корневой вызов (агрегат - голыми строками).
+// serialize returns true when the value was written completely. In bounded mode it returns false
+// if out.capacity() would be exceeded. SIZE_MAX depth marks the root call, whose aggregate is
+// rendered as bare rows.
 template <auto Opts = sopts{}, typename T>
 bool serialize(const T& val, std::string& out, size_t depth = SIZE_MAX);  // forward
 
@@ -86,11 +86,11 @@ bool serialize(const T& val, std::string& out, size_t depth = SIZE_MAX);  // for
 
 template <class> inline constexpr bool ser_always_false = false;
 
-// нужно ли заключать строку в кавычки (реализация в detail.cpp - использует detail-предикаты)
+// Whether a string must be quoted; implemented in detail.cpp with the token predicates.
 bool ser_string_needs_quote(std::string_view s);
 
-// Единственная точка записи в out. При Opts.bounded не выходим за capacity(): если не влезает -
-// НЕ пишем и возвращаем false (вызывающий останавливается). Без bounded - всегда пишем, true.
+// Single write point. With Opts.bounded, never grow past capacity: if the append would not fit,
+// write nothing and return false. Without bounded mode, always write.
 template <auto Opts>
 bool ser_put(std::string& out, std::string_view s) {
   if constexpr (Opts.bounded) { if (out.size() + s.size() > out.capacity()) return false; }
@@ -125,9 +125,9 @@ template <auto Opts> bool ser_float(double v, std::string& out) {
 template <auto Opts>
 bool ser_string(std::string_view s, std::string& out) {
   if (!Opts.full_escape && !Opts.quote_all_strings && !ser_string_needs_quote(s))
-    return ser_put<Opts>(out, s);   // без кавычек: валидный идентификатор
+    return ser_put<Opts>(out, s);   // unquoted valid identifier
 
-  // escape пишем сразу в out побайтово через ser_put (bounded-aware), без промежуточной строки
+  // Escape directly into out through bounded-aware ser_put; no temporary string.
   const auto put = [&out](char c) { return ser_put<Opts>(out, c); };
   if (!ser_put<Opts>(out, '\"')) return false;
   bool ok;
@@ -138,12 +138,12 @@ bool ser_string(std::string_view s, std::string& out) {
 }
 
 enum class ser_kind {
-  named,   // структура/map: поле на строке (prettify)
-  group,   // tuple/pair/позиционный агрегат: инлайн, перенос если дети многострочные
-  seq,     // []/set: инлайн, перенос по wrap_at
+  named,   // struct/map: field rows when prettified
+  group,   // tuple/pair/positional aggregate
+  seq,     // []/set, optionally wrapped by wrap_at
 };
 
-// Пишем прямо в out без промежуточных буферов; верстку (одна строка / много) решает ser_multiline ДО записи.
+// Write directly into out without temporary render buffers; ser_multiline decides layout up front.
 template <auto Opts>
 bool ser_open(std::string& out, char open, bool multiline) {
   if (!ser_put<Opts>(out, open)) return false;
@@ -165,8 +165,8 @@ bool ser_close(std::string& out, size_t depth, char close, bool multiline) {
   return ser_put<Opts>(out, close);
 }
 
-// Структурный предикат многострочности (без рендера), ветки в порядке диспетчера. Замечание: строка
-// с литеральным '\n' тут НЕ считается многострочной - косметика (перенос внутри кавычек валиден).
+// Structural multiline predicate, no rendering. Branch order mirrors serialize(). A literal newline
+// inside a string does not force multiline layout; newlines inside quoted strings are valid.
 template <auto Opts, typename T>
 bool ser_multiline(const T& val, size_t depth) {
   if constexpr (!Opts.prettify) return false;
@@ -198,7 +198,7 @@ bool ser_multiline(const T& val, size_t depth) {
       if (fc == 0) return false;
       const size_t field_level = root ? 0 : d + 1;
       if (field_level < Opts.names_depth) return true;             // named non-empty
-      bool m = false;                                              // group -> по детям
+      bool m = false;                                              // group layout follows children
       reflect::for_each([&](auto I) { m = m || ser_multiline<Opts>(reflect::get<I>(val), root ? 0 : d + 1); }, val);
       return m;
     }
@@ -206,7 +206,7 @@ bool ser_multiline(const T& val, size_t depth) {
   }
 }
 
-// ---------------- основной диспетчер (порядок веток как в deserialize) ----------------
+// ---------------- main dispatcher; branch order mirrors deserialize ----------------
 
 template <auto Opts, typename T>
 bool serialize(const T& val, std::string& out, size_t depth) {
@@ -217,12 +217,12 @@ bool serialize(const T& val, std::string& out, size_t depth) {
   if constexpr (std::is_same_v<T, bool>) {
     return ser_put<Opts>(out, val ? std::string_view("true") : std::string_view("false"));
   }
-  else if constexpr (std::is_integral_v<T>) {                 // char кастуем в число (зеркало to_int)
+  else if constexpr (std::is_integral_v<T>) {                 // char is rendered as a number, mirroring to_int
     using FT = std::conditional_t<(sizeof(T) == 1),
                  std::conditional_t<std::is_signed_v<T>, int, unsigned int>, T>;
     FT fv = static_cast<FT>(val);
     if constexpr (Opts.int_fmt.empty()) return ser_int<Opts>(fv, out);
-    else return ser_put<Opts>(out, std::format(Opts.int_fmt.view(), fv));   // Opts - NTTP => consteval-проверка формата
+    else return ser_put<Opts>(out, std::format(Opts.int_fmt.view(), fv));   // Opts is an NTTP, so format is compile-time data
   }
   else if constexpr (std::is_floating_point_v<T>) {
     double fv = static_cast<double>(val);
@@ -234,7 +234,7 @@ bool serialize(const T& val, std::string& out, size_t depth) {
     milliseconds ms{};
     if constexpr (ds_is_time_point<T>::value) ms = duration_cast<milliseconds>(val.time_since_epoch());
     else                                      ms = duration_cast<milliseconds>(val);
-    char buf[40];   // datetime ограниченной длины - без std::string
+    char buf[40];   // datetime output is bounded; avoid std::string
     const size_t n = detail::format_iso_datetime(detail::unix_ms_to_iso_datetime(ms), buf, sizeof(buf), Opts.iso_datetime ? 'T' : '_');
     return ser_put<Opts>(out, std::string_view(buf, n));
   }
@@ -245,7 +245,7 @@ bool serialize(const T& val, std::string& out, size_t depth) {
     if constexpr (Opts.serialize_cstr) return ser_string<Opts>(val, out);
     else static_assert(ser_always_false<T>, "tavl::serialize: std::string_view disabled (asymmetric) - set serialize_cstr=true to allow");
   }
-  else if constexpr (ds_is_char_array<T>::value) {            // char[N] / std::array<char,N>, до '\0'
+  else if constexpr (ds_is_char_array<T>::value) {            // char[N] / std::array<char,N>, up to '\0'
     const char* data; size_t n;
     if constexpr (std::is_array_v<T>) { data = val; n = std::extent_v<T>; }
     else                              { data = val.data(); n = val.size(); }
@@ -268,7 +268,7 @@ bool serialize(const T& val, std::string& out, size_t depth) {
     }
   }
   else if constexpr (ds_is_optional<T>::value) {
-    return val.has_value() ? serialize<Opts>(*val, out, depth) : ser_put<Opts>(out, "null");   // прозрачно: тот же depth
+    return val.has_value() ? serialize<Opts>(*val, out, depth) : ser_put<Opts>(out, "null");   // transparent wrapper: same depth
   }
   else if constexpr (ds_is_unique_ptr<T>::value) {
     return val ? serialize<Opts>(*val, out, depth) : ser_put<Opts>(out, "null");
@@ -289,7 +289,7 @@ bool serialize(const T& val, std::string& out, size_t depth) {
     }, val);
     return ok && ser_close<Opts>(out, d, ')', ml);
   }
-  else if constexpr (ds_is_std_array<T>::value) {             // ДО is_aggregate: std::array - тоже агрегат
+  else if constexpr (ds_is_std_array<T>::value) {             // before is_aggregate: std::array is also an aggregate
     const bool ml = ser_multiline<Opts>(val, d);
     bool ok = ser_open<Opts>(out, '[', ml);
     size_t i = 0;
@@ -303,7 +303,7 @@ bool serialize(const T& val, std::string& out, size_t depth) {
     for (const auto& x : val) { if (!ok) break; ok = ser_sep<Opts>(out, d, ser_kind::seq, ml, i) && serialize<Opts>(x, out, d + 1); ++i; }
     return ok && ser_close<Opts>(out, d, ']', ml);
   }
-  else if constexpr (ds_is_map<T>::value) {                   // записи key = value
+  else if constexpr (ds_is_map<T>::value) {                   // key = value entries
     const bool ml = ser_multiline<Opts>(val, d);
     bool ok = ser_open<Opts>(out, '{', ml);
     size_t i = 0;
@@ -315,7 +315,7 @@ bool serialize(const T& val, std::string& out, size_t depth) {
     }
     return ok && ser_close<Opts>(out, d, '}', ml);
   }
-  else if constexpr (ds_has_key_type<T>::value) {             // set / multiset (map уже выше)
+  else if constexpr (ds_has_key_type<T>::value) {             // set / multiset; map handled above
     const bool ml = ser_multiline<Opts>(val, d);
     bool ok = ser_open<Opts>(out, '[', ml);
     size_t i = 0;
@@ -324,11 +324,11 @@ bool serialize(const T& val, std::string& out, size_t depth) {
   }
   else if constexpr (std::is_aggregate_v<T>) {
     const size_t field_level = root ? 0 : d + 1;
-    const bool names = field_level < Opts.names_depth;        // строго: names_depth=0 -> имён нет даже в root
+    const bool names = field_level < Opts.names_depth;        // strict: names_depth=0 disables names even at root
     const size_t cd = root ? 0 : d + 1;
     bool ok = true;
 
-    if (root) {                                               // корень: голые строки, разделитель ВСЕГДА '\n'
+    if (root) {                                               // root: bare rows, always separated by '\n'
       size_t i = 0;
       reflect::for_each([&](auto I) {
         if (!ok) return;

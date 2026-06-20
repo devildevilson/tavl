@@ -45,35 +45,35 @@ namespace tavl {
 
 struct ct_context {
   struct frame {
-    event_type term = event_type::eof;  // терминатор уровня (block-end / row_end / eof)
-    size_t pos = 0;                      // индекс под-элемента в обработке (поле/слот) либо число прочитанных слотов
-    size_t next = 0;                     // позиционный счётчик (array index)
-    bool in_element = false;             // под-элемент начат, но не дочитан (стоп пришёлся внутрь него)
-    bool positional = false;             // текущий под-элемент агрегата - позиционный
-    bool skipping = false;               // идёт пропуск значения (ds_skip_value), прерванный стопом
-    size_t skip_depth = 0;               // глубина скобок незавершённого пропуска (для резюма)
-    std::any carry;                      // частичный ключ (map) / элемент (set) при резюме внутри записи
-    size_t field_count = 0;              // число полей агрегата (>256 - ошибка компиляции, см. static_assert)
-    std::bitset<limits::max_fields> seen;// отметки заполненных полей (фикс. размер вместо vector)
+    event_type term = event_type::eof;  // level terminator: block-end, row_end, or eof
+    size_t pos = 0;                     // current sub-element index, or number of completed slots
+    size_t next = 0;                    // positional counter / array index
+    bool in_element = false;            // a sub-element has started but not finished
+    bool positional = false;            // current aggregate sub-element came from positional input
+    bool skipping = false;              // resumable ds_skip_value is in progress
+    size_t skip_depth = 0;              // bracket depth for an unfinished skip
+    std::any carry;                     // partial map key / set element across resume
+    size_t field_count = 0;             // aggregate field count; >max_fields is a compile error
+    std::bitset<limits::max_fields> seen;// filled aggregate fields, fixed-size instead of vector
   };
 
   struct diagnostic { struct error error; std::string_view field; };
 
-  std::optional<event> peeked;          // 1-событийный lookahead (не кэшируем not_enought_data!)
-  std::deque<frame> frames;             // стек кадров уровней (резюм)
-  size_t cursor = 0;                    // курсор повторного спуска по frames (сброс в 0 на внешнем входе)
-  bool stalled = false;                 // встретили not_enought_data - разматываемся наружу
+  std::optional<event> peeked;          // one-event lookahead; not_enought_data is never cached
+  std::deque<frame> frames;             // level stack used for resume
+  size_t cursor = 0;                    // re-entry cursor through frames, reset by the outer scope
+  bool stalled = false;                 // not_enought_data was hit; unwind outward
   std::vector<diagnostic> diagnostics;
-  std::string strbuf;                   // переиспользуемый буфер строк (char-массивы) - не плодим локальные
-  size_t depth = 0;                     // глубина рекурсии (для распознавания внешнего кадра)
+  std::string strbuf;                   // reusable string buffer for char arrays
+  size_t depth = 0;                     // recursion depth, used to detect the outer call
 
-  // диагностика с жёстким лимитом: дальше limits::max_diagnostics не пишем (обрезаем)
+  // Diagnostics are capped to keep memory bounded.
   void push_diagnostic(struct error e, std::string_view field = {}) {
     if (diagnostics.size() < limits::max_diagnostics) diagnostics.push_back({e, field});
   }
 };
 
-// RAII внешнего кадра: на входе сбрасывает курсор/stalled; на СВЕЖЕЙ сессии (frames пуст) чистит lookahead/диагностику.
+// RAII outer scope: resets cursor/stalled on entry; for a fresh session also clears lookahead and diagnostics.
 struct ct_scope {
   ct_context& ctx;
   explicit ct_scope(ct_context& c) noexcept;
@@ -82,9 +82,9 @@ struct ct_scope {
 
 template <typename T> void deserialize(parser& p, ct_context& ctx, T& val);   // forward
 
-// --- хелперы потока событий (определения в deserialize.cpp) ---
-// lookahead-обёртки. not_enought_data НЕ кэшируем (переполлим после flush) и помечаем ctx.stalled.
-// Ошибки парсера, приходящие с событием, собираем в ctx.diagnostics (1 раз на событие - при полле).
+// --- event stream helpers (definitions in deserialize.cpp) ---
+// Lookahead wrappers. not_enought_data is not cached (it must be re-polled after flush) and sets
+// ctx.stalled. Parser errors attached to events are collected once in ctx.diagnostics.
 event ct_peek(parser& p, ct_context& ctx);
 event ct_next(parser& p, ct_context& ctx);
 
@@ -92,20 +92,21 @@ bool ds_is_block_begin(event_type t);
 bool ds_is_block_end(event_type t);
 event_type ds_block_end(event_type begin);
 
-// вход в loop-уровень: резюм -> усыновляем кадр; свежий -> detect term + push. SIZE_MAX + ctx.stalled -> вызыватель return.
+// Enter a loop level: resume adopts an existing frame; fresh input detects term and pushes a frame.
+// SIZE_MAX with ctx.stalled means the caller should return.
 size_t ds_enter(parser& p, ct_context& ctx, bool& resuming, event_type default_term);
 
-// пропуск ОДНОГО значения (с вложенными скобками) до row_end текущего элемента, не съедая row_end.
-// depth - глубина скобок (in/out): хранится в кадре, чтобы пропуск переживал стоп посреди вложенного блока.
+// Skip one value, including nested brackets, up to but not consuming row_end. depth is in/out and
+// stored in a frame so the skip can resume in the middle of a nested block.
 void ds_skip_value(parser& p, ct_context& ctx, size_t& depth);
 
-// пропуск значения с резюмируемым состоянием в кадре. true = стоп (вызыватель должен return).
+// Frame-backed resumable value skip. true means the caller should return.
 bool ds_skip_framed(parser& p, ct_context& ctx, ct_context::frame& fr);
 
-// дочитывает группу до терминатора (съедая закрывающую скобку, если term - *_end; row_end оставляем родителю)
+// Finish a group through its terminator. Block ends are consumed; row_end is left to the parent.
 void ds_finish_group(parser& p, ct_context& ctx, event_type term);
 
-// читает ОДИН слот (pair/tuple): пропускает разделители (делимитеры строк + операторы '='/',') и читает значение
+// Read one pair/tuple slot: skip row delimiters and operator separators, then read the value.
 template <typename E>
 void ds_read_slot(parser& p, ct_context& ctx, event_type term, E& slot) {
   while (true) {
@@ -143,7 +144,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       if constexpr (std::is_signed_v<T>) {
-        if (const auto v = p.to_int(ev.token)) val = static_cast<T>(*v);   // to_int принимает int+uint(hex/oct/bin)
+        if (const auto v = p.to_int(ev.token)) val = static_cast<T>(*v);   // to_int accepts int and uint hex/oct/bin
         else ctx.push_diagnostic(error{error_type::err_expect_token_number_int, ev.token.span});
       } else {
         if (const auto v = p.to_uint(ev.token)) val = static_cast<T>(*v);
@@ -161,8 +162,8 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     }
   }
   else if constexpr (ds_is_time_point<T>::value || ds_is_duration<T>::value) {
-    // datetime-токен -> Unix-мс (UTC); time_point строим из длительности от эпохи,
-    // duration получает «сырые» миллисекунды от эпохи (как и просили - без календарной семантики)
+    // datetime token -> Unix milliseconds (UTC). time_point is built from epoch duration; duration
+    // receives the raw epoch-millisecond value without calendar semantics.
     event ev = ct_peek(p, ctx); if (ctx.stalled) return;
     if (ev.type == event_type::got_row_operator) { ct_next(p, ctx); ev = ct_peek(p, ctx); if (ctx.stalled) return; }
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
@@ -182,22 +183,22 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       val = p.to_string(ev.token);
     }
   }
-  else if constexpr (ds_is_char_array<T>::value) {         // std::array<char,N> / char[N] - строковый буфер
+  else if constexpr (ds_is_char_array<T>::value) {         // std::array<char,N> / char[N] string buffer
     event ev = ct_peek(p, ctx); if (ctx.stalled) return;
     if (ev.type == event_type::got_row_operator) { ct_next(p, ctx); ev = ct_peek(p, ctx); if (ctx.stalled) return; }
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
-      ctx.strbuf = p.to_string(ev.token);                  // строка в контекстный буфер (без локального контейнера)
+      ctx.strbuf = p.to_string(ev.token);                  // context buffer avoids local containers
       char* data; size_t n;
       if constexpr (std::is_array_v<T>) { data = val; n = std::extent_v<T>; }
       else                              { data = val.data(); n = val.size(); }
       const size_t len = ctx.strbuf.size();
-      for (size_t i = 0; i < n; ++i) data[i] = (i < len) ? ctx.strbuf[i] : char(0);   // копируем + zero-fill хвост
+      for (size_t i = 0; i < n; ++i) data[i] = (i < len) ? ctx.strbuf[i] : char(0);   // copy + zero-fill tail
       if (len > n) ctx.push_diagnostic(error{error_type::err_string_too_long, ev.token.span});
     }
   }
   else if constexpr (ds_is_optional<T>::value) {
-    if (ctx.cursor < ctx.frames.size()) {                  // РЕЗЮМ: продолжаем заполнять внутреннее
+    if (ctx.cursor < ctx.frames.size()) {                  // resume: continue filling the contained value
       ctx.cursor++;
       if (val.has_value()) { deserialize(p, ctx, *val); if (ctx.stalled) return; }
       ctx.frames.pop_back(); ctx.cursor = ctx.frames.size();
@@ -216,7 +217,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
   }
   else if constexpr (ds_is_unique_ptr<T>::value) {
     using U = typename T::element_type;
-    if (ctx.cursor < ctx.frames.size()) {                  // РЕЗЮМ
+    if (ctx.cursor < ctx.frames.size()) {                  // resume
       ctx.cursor++;
       if (val) { deserialize(p, ctx, *val); if (ctx.stalled) return; }
       ctx.frames.pop_back(); ctx.cursor = ctx.frames.size();
@@ -249,9 +250,9 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     size_t idx = 0;
     std::apply([&](auto&... slots) {
       ([&]{
-        if (ctx.stalled || idx < fr.pos) { idx += 1; return; }   // стоп выше / слот уже прочитан
+        if (ctx.stalled || idx < fr.pos) { idx += 1; return; }   // already stopped or this slot is done
         ds_read_slot(p, ctx, fr.term, slots);
-        if (!ctx.stalled) fr.pos = idx + 1;                      // при стопе pos не двигаем -> резюм перечитает слот
+        if (!ctx.stalled) fr.pos = idx + 1;                      // on stall, leave pos so resume rereads the slot
         idx += 1;
       }(), ...);
     }, val);
@@ -293,7 +294,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       fr.in_element = false;
       fr.next = fr.pos + 1;
     }
-    if (fr.next != val.size()) ctx.push_diagnostic(error{error_type::err_too_many_values, {}});  // размер не совпал
+    if (fr.next != val.size()) ctx.push_diagnostic(error{error_type::err_too_many_values, {}});  // size mismatch
     ctx.frames.pop_back(); ctx.cursor = ctx.frames.size();
   }
   else if constexpr (ds_has_push_back<T>::value) {         // vector / list / deque
@@ -316,12 +317,12 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     }
     ctx.frames.pop_back(); ctx.cursor = ctx.frames.size();
   }
-  else if constexpr (ds_is_map<T>::value) {                // map / unordered_map: записи key=value в {} или ()
+  else if constexpr (ds_is_map<T>::value) {                // map / unordered_map: key=value entries in {} or ()
     using K = typename T::key_type;
     bool resuming; const size_t fi = ds_enter(p, ctx, resuming, event_type::row_end);
     if (ctx.stalled) return;
     auto& fr = ctx.frames[fi];
-    if (fr.in_element) {                                   // дочитать value для сохранённого ключа (в carry)
+    if (fr.in_element) {                                   // finish the value for the key saved in carry
       deserialize(p, ctx, val[*std::any_cast<K>(&fr.carry)]); if (ctx.stalled) return;
       fr.in_element = false; fr.carry.reset();
     } else if (fr.skipping) { if (ds_skip_framed(p, ctx, fr)) return; }
@@ -331,24 +332,24 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       if (ev.type == fr.term) { if (ds_is_block_end(fr.term)) ct_next(p, ctx); break; }
       if (ev.type == event_type::row_begin || ev.type == event_type::row_end ||
           ev.type == event_type::empty_row || ev.type == event_type::got_comment) { ct_next(p, ctx); continue; }
-      if (ev.type == event_type::got_row_identifier) {     // запись с ключом
-        fr.carry = K{};                                    // ключ строим В carry (без локального контейнера)
-        deserialize(p, ctx, *std::any_cast<K>(&fr.carry)); if (ctx.stalled) return;  // ключ (скаляр - идемпотентен)
-        fr.in_element = true;                              // ключ зафиксирован -> читаем value (val[key] создаст запись)
+      if (ev.type == event_type::got_row_identifier) {     // keyed entry
+        fr.carry = K{};                                    // build key in carry, not a local container
+        deserialize(p, ctx, *std::any_cast<K>(&fr.carry)); if (ctx.stalled) return;  // scalar key is idempotent
+        fr.in_element = true;                              // key is fixed; val[key] creates the entry
         deserialize(p, ctx, val[*std::any_cast<K>(&fr.carry)]); if (ctx.stalled) return;
         fr.in_element = false; fr.carry.reset();
       } else {
-        if (ds_skip_framed(p, ctx, fr)) return;            // bare-запись без ключа - не пара
+        if (ds_skip_framed(p, ctx, fr)) return;            // bare entry without a key is not a pair
       }
     }
     ctx.frames.pop_back(); ctx.cursor = ctx.frames.size();
   }
-  else if constexpr (ds_has_key_type<T>::value) {          // set / multiset / unordered_set (map уже выше)
+  else if constexpr (ds_has_key_type<T>::value) {          // set / multiset / unordered_set; map handled above
     using E = typename T::value_type;
     bool resuming; const size_t fi = ds_enter(p, ctx, resuming, event_type::row_end);
     if (ctx.stalled) return;
     auto& fr = ctx.frames[fi];
-    if (fr.in_element) {                                   // дочитать частичный элемент из carry
+    if (fr.in_element) {                                   // finish the partial element held in carry
       deserialize(p, ctx, *std::any_cast<E>(&fr.carry)); if (ctx.stalled) return;
       val.insert(std::move(*std::any_cast<E>(&fr.carry)));
       fr.in_element = false; fr.carry.reset();
@@ -359,7 +360,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       if (ev.type == fr.term) { if (ds_is_block_end(fr.term)) ct_next(p, ctx); break; }
       if (ev.type == event_type::row_begin || ev.type == event_type::row_end ||
           ev.type == event_type::empty_row || ev.type == event_type::got_comment) { ct_next(p, ctx); continue; }
-      fr.carry = E{}; fr.in_element = true;                // элемент строим В carry (переживает разматывание)
+      fr.carry = E{}; fr.in_element = true;                // build the element in carry so it survives unwinding
       deserialize(p, ctx, *std::any_cast<E>(&fr.carry)); if (ctx.stalled) return;
       val.insert(std::move(*std::any_cast<E>(&fr.carry)));
       fr.in_element = false; fr.carry.reset();
@@ -368,18 +369,18 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
   }
   else if constexpr (std::is_aggregate_v<T>) {
     static_assert(reflect::size<T>() <= limits::max_fields, "tavl::deserialize: aggregate has more than limits::max_fields members");
-    bool resuming; const size_t fi = ds_enter(p, ctx, resuming, event_type::eof);   // корень -> до eof
+    bool resuming; const size_t fi = ds_enter(p, ctx, resuming, event_type::eof);   // root reads until eof
     if (ctx.stalled) return;
     auto& fr = ctx.frames[fi];
     if (!resuming) { size_t fc = 0; reflect::for_each([&](auto) { fc += 1; }, val); fr.field_count = fc; fr.seen.reset(); }
 
-    if (fr.in_element) {                                   // дочитать под-поле fr.pos
+    if (fr.in_element) {                                   // finish sub-field fr.pos
       const size_t cur = fr.pos; const bool was_pos = fr.positional;
       size_t counter = 0;
       reflect::for_each([&](auto I) { if (counter == cur) deserialize(p, ctx, reflect::get<I>(val)); counter += 1; }, val);
       if (ctx.stalled) return;
       fr.in_element = false;
-      if (!was_pos) { if (ds_skip_framed(p, ctx, fr)) return; }   // named: съесть лишние токены до row_end
+      if (!was_pos) { if (ds_skip_framed(p, ctx, fr)) return; }   // named: skip extra tokens until row_end
     } else if (fr.skipping) { if (ds_skip_framed(p, ctx, fr)) return; }
 
     while (true) {
@@ -389,18 +390,18 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       if (ev.type == event_type::row_begin || ev.type == event_type::row_end ||
           ev.type == event_type::empty_row || ev.type == event_type::got_comment) { ct_next(p, ctx); continue; }
 
-      if (ev.type == event_type::got_row_identifier) {     // named: имя -> поле
+      if (ev.type == event_type::got_row_identifier) {     // named: row id -> field
         const auto name = p.content(ev.token.span);
         const auto name_span = ev.token.span;
         ct_next(p, ctx);
         size_t found = SIZE_MAX, counter = 0;
-        std::string_view fname{};   // статичное имя поля (member_name) - в отличие от name (буфер парсера) не висит
+        std::string_view fname{};   // static member_name; unlike parser-buffer name, it stays valid
         reflect::for_each([&](auto I) {
           if (found == SIZE_MAX && name == reflect::member_name<I>(val)) { found = counter; fname = reflect::member_name<I>(val); }
           counter += 1;
         }, val);
         if (found != SIZE_MAX && found < fr.field_count && fr.seen[found]) {
-          // поле уже заполнено (по индексу/повторно по имени) - явная ошибка пользователя
+          // The field was already filled, either positionally or by name.
           ctx.push_diagnostic(error{error_type::err_duplicate_field, name_span}, fname);
           if (ds_skip_framed(p, ctx, fr)) return;
         } else if (found != SIZE_MAX) {
@@ -410,14 +411,14 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
           reflect::for_each([&](auto I) { if (counter == found) deserialize(p, ctx, reflect::get<I>(val)); counter += 1; }, val);
           if (ctx.stalled) return;
           fr.in_element = false;
-          if (ds_skip_framed(p, ctx, fr)) return;          // съесть лишние токены до row_end
+          if (ds_skip_framed(p, ctx, fr)) return;          // skip extra tokens until row_end
         } else {
-          if (ds_skip_framed(p, ctx, fr)) return;          // поле не найдено - пропускаем
+          if (ds_skip_framed(p, ctx, fr)) return;          // unknown field
         }
-      } else {                                             // positional -> в наименьшее НЕзаполненное поле
+      } else {                                             // positional -> first unfilled field
         size_t idx = SIZE_MAX;
         for (size_t i = 0; i < fr.field_count; ++i) if (!fr.seen[i]) { idx = i; break; }
-        if (idx == SIZE_MAX) {                             // полей не осталось - лишнее значение
+        if (idx == SIZE_MAX) {                             // no fields left
           ctx.push_diagnostic(error{error_type::err_too_many_values, ev.token.span});
           if (ds_skip_framed(p, ctx, fr)) return;
         } else {
@@ -431,7 +432,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       }
     }
 
-    // warning о незаполненных полях (optional/unique_ptr - отсутствие норм)
+    // Warn about missing required fields; optional and unique_ptr may be absent.
     size_t ci = 0;
     reflect::for_each([&](auto I) {
       using FT = std::remove_reference_t<decltype(reflect::get<I>(val))>;
@@ -443,19 +444,18 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     ctx.frames.pop_back(); ctx.cursor = ctx.frames.size();
   }
   else {
-    // не распознан как примитив/контейнер/агрегат (enum, кастомные типы) -
-    // пользователь задаёт через перегрузку deserialize; иначе пропускаем значение
+    // Unsupported primitive/container/aggregate category (enum or custom type). Users can provide
+    // an ADL deserialize overload; otherwise we skip one value.
     size_t d = 0;
     ds_skip_value(p, ctx, d);
   }
 }
 
-// Читает ОДИН верхнеуровневый экземпляр T из текущей позиции (пропустив маркеры строк), true; eof -> false.
-// В цикле: одиночный файл -> 1 экземпляр; файл-список ((...),(...),...) -> N. Это просто инструмент -
-// «лист» НЕ стандартизируется: каждый верхнеуровневый блок/строка трактуется как отдельный экземпляр.
-// Классифицировать заранее можно через parser::peek() (первое содержательное событие: блок-begin -> список).
-// Маркеры-комментарии (в т.ч. //--- разделитель документов) пропускаются - документы разделять ДО итерации.
-// Предполагает полный флаш входа; диагностики каждого экземпляра - в ctx (перетираются на следующем вызове).
+// Read one top-level T from the current stream position (skipping row markers). Returns false at eof.
+// The same loop reads one instance from a single-record file or N instances from a top-level list;
+// the list shape is only a convention, not a separate schema. Use parser::peek() to classify up front:
+// first content event being a block begin means list. Comments, including //--- separators, are skipped;
+// split documents before iterating. Assumes all input for the current document has been flushed.
 template <typename T>
 bool deserialize_next(parser& p, ct_context& ctx, T& out) {
   for (;;) {
@@ -463,19 +463,18 @@ bool deserialize_next(parser& p, ct_context& ctx, T& out) {
     if (ev.type == event_type::eof || ev.type == event_type::not_enought_data) return false;
     if (ev.type == event_type::row_begin || ev.type == event_type::row_end ||
         ev.type == event_type::empty_row || ev.type == event_type::got_comment) {
-      p.poll_event();   // пропускаем маркер верхнего уровня
+      p.poll_event();   // skip top-level marker
       continue;
     }
-    break;              // на содержательном событии
+    break;              // first content event
   }
   deserialize(p, ctx, out);
   return true;
 }
 
-// Освободить уже прочитанный ввод (стриминг): для сетевых пачек - после каждого deserialize_next
-// сбрасываем разобранные байты, чтобы буфер не рос с общим объёмом потока. Учитывает и lookahead
-// парсера (consumed_offset), и буферизованное событие deserialize (ctx.peeked) - его байты не трогаем.
-// После вызова content() для отброшенных спанов пуст, но их значения уже извлечены в out.
+// Release already-consumed input while streaming. This considers both parser lookahead and the
+// deserialize-level cached event. After release, content() for discarded spans is empty, but their
+// values have already been copied into the output object.
 inline void release_consumed(parser& p, ct_context& ctx) {
   size_t boundary = p.consumed_offset();
   if (ctx.peeked) {

@@ -1,7 +1,7 @@
 #pragma once
 
-// Утилиты для тестов: обёртки над стриминговым API tavl (поллинг событий, десериализация
-// целиком/по байту, round-trip, сборка и рендер AST в строку для сравнения в CHECK).
+// Test utilities over the streaming tavl API: event polling, full/byte-by-byte deserialize,
+// round-trip helpers, AST building, and AST rendering for CHECK comparisons.
 
 #include <string>
 #include <string_view>
@@ -18,7 +18,7 @@ struct ev_err {
   tavl::error error;
 };
 
-// Флашит src целиком + finish, собирает ВСЕ (событие, ошибка) до eof включительно.
+// Flush all of src, finish, and collect every (event, error) pair through eof.
 inline std::vector<ev_err> poll_all(tavl::parser& p, std::string_view src) {
   p.clear();
   p.flush(src);
@@ -49,7 +49,7 @@ inline size_t count_event(const std::vector<ev_err>& evs, tavl::event_type t) {
   return n;
 }
 
-// Типы токенов всех событий got_token (для проверки лексера через поток событий).
+// Token types from all got_token events, used to test lexer behavior through the event stream.
 inline std::vector<tavl::token_type> got_token_types(const std::vector<ev_err>& evs) {
   std::vector<tavl::token_type> out;
   for (const auto& e : evs)
@@ -59,7 +59,7 @@ inline std::vector<tavl::token_type> got_token_types(const std::vector<ev_err>& 
 
 // --- deserialize ---
 
-// Десериализация при полном флаше входа.
+// Deserialize after a full input flush.
 template <typename T>
 inline T deserialize_all(tavl::parser& p, std::string_view src, tavl::ct_context& ctx) {
   p.clear();
@@ -76,7 +76,7 @@ inline T deserialize_all(tavl::parser& p, std::string_view src) {
   return deserialize_all<T>(p, src, ctx);
 }
 
-// Десериализация по chunk байт за раз (проверка резюма стриминга: stalled -> долить -> продолжить).
+// Deserialize in chunk-sized pieces; verifies resume via stalled -> flush more -> continue.
 template <typename T>
 inline T deserialize_streamed(tavl::parser& p, std::string_view src, size_t chunk = 1) {
   p.clear();
@@ -96,7 +96,7 @@ inline T deserialize_streamed(tavl::parser& p, std::string_view src, size_t chun
   return val;
 }
 
-// round-trip: значение -> текст (serialize) -> обратно в значение (deserialize).
+// Round-trip: value -> text via serialize -> value via deserialize.
 template <auto Opts = tavl::sopts{}, typename T>
 inline T round_trip(tavl::parser& p, const T& val) {
   std::string out;
@@ -125,8 +125,8 @@ inline std::string_view node_type_name(tavl::node_type t) {
   }
 }
 
-// Рекурсивный рендер плоского AST (nodes[0] - корень поддерева) в S-выражение:
-//   (pair '=' (tok 'a') (tok 'b')). Текст токена опускается, если пуст (синтетические узлы).
+// Recursive render of a flat AST subtree as an S-expression:
+//   (pair '=' (tok 'a') (tok 'b')). Empty token text is omitted for synthetic nodes.
 inline void ast_node_str(const tavl::parser& p, const tavl::node* nodes, std::string& out) {
   out += "(";
   out += node_type_name(nodes[0].type);
@@ -146,8 +146,8 @@ inline std::string ast_str(const tavl::parser& p, const std::vector<tavl::node>&
   return out;
 }
 
-// Прогоняет один builder (make_pair_ast / make_tag_ast / make_math_ast) над одной строкой src
-// и возвращает собранный AST. src флашится целиком. Прокручиваем до row_begin, как в демо.
+// Run one builder (make_pair_ast / make_tag_ast / make_math_ast) on one row and return the built
+// AST. src is flushed all at once; we advance to row_begin, as a caller normally would.
 struct ast_result {
   tavl::event event;
   tavl::error error;

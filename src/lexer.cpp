@@ -53,19 +53,13 @@ size_t char_storage::buffer_size() const {
 }
 
 token lexer::lex(const char_storage& storage) {
-  // читаем входной сторадж, если дошли до управляющих символов
-  // то разбираем токены и отправляем что есть
-  // тут алгоритм вот какой:
-  // получаем строчку до ' ', '\n', ',' и символов скобок
-  // если эта строчка не зарезервированное слово или не дата или не число и не идентификатор
-  // то пытаемся строку подразбить на пачку идентификаторов + операторы
+  // Read until a delimiter, then classify the accumulated span as a scalar token. If that fails,
+  // switch to identifier mode and split it into registered operators and identifiers.
 
   if (state.mode == lexer_mode::standard) {
     while (state.offset < storage.size()) {
       const char prev = storage.peek(state.offset-1);
       const char cur = storage.peek(state.offset);
-      // адванс должен произойти где то рядом
-
       if (prev == '/' && cur == '/' && state.offset-1 > state.token_span.offset) {
         auto t = make_token(storage);
         if (!t.valid()) {
@@ -93,8 +87,8 @@ token lexer::lex(const char_storage& storage) {
         case '\r':
         case '\f':
         case '\v':
-        case '\t': // все вайтспейсы
-        case '\n': // новая строка
+        case '\t':
+        case '\n':
         case ',':
         case '{':
         case '(':
@@ -119,8 +113,6 @@ token lexer::lex(const char_storage& storage) {
 
       if (state.mode != lexer_mode::standard) break;
 
-      // переключаем режимы
-
       if (prev == '/' && cur == '/') {
         state.mode = lexer_mode::line_comment;
         break;
@@ -142,8 +134,6 @@ token lexer::lex(const char_storage& storage) {
         state.mode = lexer_mode::singlequote_string;
         break;
       }
-
-      // отправляем простые ивенты
 
       switch (cur) {
         case '{': {
@@ -211,15 +201,9 @@ token lexer::lex(const char_storage& storage) {
         }
       }
 
-      // на этом этапе мы отправили событие с токеном
-      // и теперь возможно остались одни вайтспейсы
-      // просто пропускаем их
-      // нет остались и обычные символы
       const size_t skipped = skip_ws(storage);
       if (skipped == 0) advance(cur);
     }
-
-    // не нашли токен или переключили режим
   }
 
   if (state.mode == lexer_mode::standard && state.finalizing && state.offset > state.token_span.offset) {
@@ -255,7 +239,6 @@ token lexer::lex(const char_storage& storage) {
       c = storage.peek(state.offset);
     }
 
-    // незаконченная строка
     if (state.finalizing) {
       auto s = state.token_span;
       s.size = state.offset - s.offset;
@@ -289,7 +272,6 @@ token lexer::lex(const char_storage& storage) {
       c = storage.peek(state.offset);
     }
 
-    // незаконченная строка
     if (state.finalizing) {
       auto s = state.token_span;
       s.size = state.offset - s.offset;
@@ -304,7 +286,7 @@ token lexer::lex(const char_storage& storage) {
     while (state.offset < storage.size()) {
       const char cur = storage.peek(state.offset);
 
-      if (cur == '\n') { // еще дополнительно нужно отправить newline токен
+      if (cur == '\n') {
         auto s = state.token_span;
         s.size = state.offset - s.offset;
         state.mode = lexer_mode::standard;
@@ -315,7 +297,6 @@ token lexer::lex(const char_storage& storage) {
       advance(cur);
     }
 
-    // незаконченный коммент
     if (state.finalizing) {
       auto s = state.token_span;
       s.size = state.offset - s.offset;
@@ -345,7 +326,6 @@ token lexer::lex(const char_storage& storage) {
       advance(cur);
     }
 
-    // незаконченный коммент
     if (state.finalizing) {
       auto s = state.token_span;
       s.size = state.offset - s.offset;
@@ -356,11 +336,7 @@ token lexer::lex(const char_storage& storage) {
     }
   }
 
-  // тут попытаемся подразбить токен на идентификаторы и операторы
   if (state.mode == lexer_mode::identifier) {
-    // если даже после возможного разбиения мы получили чушь
-    // то только тогда возвращаем unrecognized
-
     size_t line = state.token_span.line;
     size_t column = state.token_span.column;
     const auto advance = [this, &line, &column] (const char c) {
@@ -375,7 +351,6 @@ token lexer::lex(const char_storage& storage) {
 
     state.division_counter = state.token_span.offset;
 
-    // тут наверное должен быть make_token для идентификаторов...
     while (state.division_counter < state.offset) {
       const char c = storage.peek(state.division_counter);
 
@@ -387,8 +362,8 @@ token lexer::lex(const char_storage& storage) {
 
       if (!found_op.empty() && state.division_counter > state.token_span.offset) {
         auto t = make_token(storage, state.division_counter);
-        // префикс перед оператором может оказаться не валидным токеном (напр. "123abc-x") -
-        // это малформный текст, не баг: отдаём unrecognized (идёт штатно через канал ошибок)
+        // The prefix before an operator may still be malformed (for example "123abc-x"). That is
+        // bad input, not an internal error, so report it through the normal unrecognized-token path.
         if (!t.valid()) t.type = token_type::unrecognized;
         state.token_span = {state.division_counter, 0, line, column};
         return t;
@@ -430,25 +405,23 @@ token lexer::lex(const char_storage& storage) {
 }
 
 void lexer::finish() {
-  // завершаем отправку данных, это означает что если например лексер не смог завершить строку
-  // (не нашел кавычку) то по идее нужно сгенерить 2 токена
   state.finalizing = true;
 }
 
 void lexer::add_operator(const std::string_view& op, op_info info) {
-  // конфигурационный ввод: невалидный оператор -> громко падаем (иначе разбор будет неожиданным)
+  // Configuration input: invalid operators are programmer errors, not parse errors.
   TAVL_CHECK(check_valid_string_chars(op, operator_chars), "operator must consist of operator_chars");
 
   const op_entry entry{op, info};
   auto itr = std::upper_bound(operators.begin(), operators.end(), entry, [] (const op_entry& a, const op_entry& b) {
-    return a.op.size() > b.op.size();   // длинные операторы раньше (longest-match)
+    return a.op.size() > b.op.size();   // longest-match: longer operators first
   });
 
   operators.insert(itr, entry);
 }
 
 void lexer::add_litteral_operator(const std::string_view& op, op_info info) {
-  // конфигурационный ввод: литеральный оператор обязан быть валидным идентификатором -> иначе громко падаем
+  // Literal operators live in identifier space, so invalid ones are programmer errors.
   TAVL_CHECK(is_valid_identificator(op), "litteral operator must be a valid identificator");
 
   const op_entry entry{op, info};
@@ -460,7 +433,7 @@ void lexer::add_litteral_operator(const std::string_view& op, op_info info) {
 }
 
 std::optional<op_info> lexer::operator_info(const std::string_view& op, op_fixity fixity) const {
-  // один и тот же оператор может быть зарегистрирован с разными фиксностями (напр. '-' унарный И бинарный)
+  // The same spelling may be registered with several fixities, for example unary and binary '-'.
   for (const auto& e : operators)          if (e.op == op && e.info.fixity == fixity) return e.info;
   for (const auto& e : litteral_operators) if (e.op == op && e.info.fixity == fixity) return e.info;
   return std::nullopt;
@@ -518,15 +491,15 @@ token lexer::make_token(const char_storage& storage, size_t local_offset) {
     if (str == op.op) return token{token_type::op, s};
   }
 
-  // datetime - по приоритету ПЕРЕД операторами и числами: содержит '-'/':' и не должен
-  // расщепляться зарегистрированным оператором '-'
+  // Datetime has priority over operators and numbers: it contains '-' and ':' but should not be
+  // split by a registered '-' operator.
   if (iso_datetime dt; is_datetime(str, dt)) {
     return token{token_type::datetime, s};
   }
 
-  // если токен содержит зарегистрированный символьный оператор - возвращаем invalid, и лексер
-  // в режиме identifier до-расщепит токен на op + остаток. Проверка ВЫШЕ чисел, поэтому при
-  // зарегистрированном '-' токен '-123' станет 'op' + 'number', а без него - знаковым числом.
+  // If a token contains a registered symbolic operator, return invalid so identifier mode can split
+  // it into operator + remainder. This check is intentionally above number parsing: with '-' registered,
+  // '-123' becomes op + number; without it, it remains a signed number.
   for (const auto &op : operators) {
     if (str.find(op.op) != std::string_view::npos) return token{token_type::invalid, s};
   }
@@ -559,12 +532,10 @@ token lexer::make_token(const char_storage& storage, size_t local_offset) {
     return token{token_type::number_float, s};
   }
 
-  // тут проверим идентификатор
   if (is_valid_identificator(str)) {
     return token{token_type::identifier, s};
   }
 
-  // вот тут тоже должен возвращаться инвалид
   return token{token_type::invalid, s};
 }
 

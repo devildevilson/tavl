@@ -1,4 +1,4 @@
-// Демонстрационные .tavl парсятся без критических ошибок.
+// Demonstration .tavl files parse without critical errors.
 
 #include <doctest/doctest.h>
 
@@ -18,16 +18,15 @@ static std::string read_file(const std::string& path) {
   return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
 }
 
-// Минимальный обход парсера: флашим весь вход, finish() (данных больше не будет), затем тянем
-// poll_event() до eof. К каждому событию прилагается ошибка; критическая (err.is_critical())
-// делает вход невалидным. eof — конец потока событий.
+// Minimal parser loop: flush the whole input, finish it, then poll_event() through eof. Every event
+// carries an attached error; a critical error makes the example invalid. eof ends the event stream.
 static void check_parses_clean(const char* name) {
   const std::string path = std::string(TAVL_FORMAT_DIR) + "/" + name;
   const std::string src = read_file(path);
-  REQUIRE_MESSAGE(!src.empty(), "не удалось прочитать " << path);
+  REQUIRE_MESSAGE(!src.empty(), "failed to read " << path);
 
   tavl::parser p;
-  p.add_default_operator();            // '=' — оператор строк формата
+  p.add_default_operator();            // '=' is the row operator for these examples
 
   p.flush(src);
   p.finish();

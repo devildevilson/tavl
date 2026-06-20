@@ -1,4 +1,4 @@
-// Расширение: make_tag_ast.
+// Extension: make_tag_ast.
 
 #include <doctest/doctest.h>
 
@@ -44,12 +44,12 @@ TEST_CASE("tag_ast: child count via node_view") {
   const auto nodes = tavl_test::build_ast(p, "name = value", tavl::make_tag_ast);
   const tavl::node_view root{nodes};
 
-  CHECK(root.type() == tavl::node_type::pair);   // пара тег-значение
-  CHECK(root.size() == 2);                        // тег 'name' и row(данные)
+  CHECK(root.type() == tavl::node_type::pair);   // tag-value pair
+  CHECK(root.size() == 2);                        // tag 'name' and row(data)
   CHECK(root.child(0).type() == tavl::node_type::token);
   const auto data = root.child(1);
-  CHECK(data.type() == tavl::node_type::row);     // rhs тега ВСЕГДА row
-  CHECK(data.size() == 1);                         // один элемент данных 'value'
+  CHECK(data.type() == tavl::node_type::row);     // tag rhs is always a row
+  CHECK(data.size() == 1);                         // one data item: 'value'
 }
 
 TEST_CASE("tag_ast: byte-by-byte streaming yields the same AST as all at once") {

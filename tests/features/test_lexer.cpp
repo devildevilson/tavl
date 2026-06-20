@@ -1,4 +1,4 @@
-// Лексер: распознавание типов токенов и стриминг.
+// Lexer: token recognition and streaming.
 
 #include <doctest/doctest.h>
 
@@ -8,7 +8,7 @@ using tavl::token_type;
 using tavl::event_type;
 
 TEST_CASE("lexer: recognition of scalar types") {
-  tavl::parser p;   // без зарегистрированных операторов
+  tavl::parser p;   // no registered operators
   const auto evs = tavl_test::poll_all(p,
     "[null, true, false, 42, 0xFF, 0o17, 0b1010, 3.14, 'abc', \"def\", 2026-06-14T12:30:00, ident]");
 
@@ -41,7 +41,7 @@ TEST_CASE("lexer: signed numbers without a registered '-'") {
 
 TEST_CASE("lexer: operators are split by longest-match") {
   tavl::parser p;
-  p.add_math_default_operators();              // регистрирует =, +, -, *, ==, <=, ...
+  p.add_math_default_operators();              // registers =, +, -, *, ==, <=, ...
   const auto evs = tavl_test::poll_all(p, "[a, +, b, ==, c]");
   const auto t = tavl_test::got_token_types(evs);
   REQUIRE(t.size() == 5);
@@ -58,13 +58,13 @@ TEST_CASE("lexer: with a registered '-' a number is split into op + number") {
   const auto evs = tavl_test::poll_all(p, "[-7]");
   const auto t = tavl_test::got_token_types(evs);
   REQUIRE(t.size() == 2);
-  CHECK(t[0] == token_type::op);               // унарный минус
+  CHECK(t[0] == token_type::op);               // unary minus
   CHECK(t[1] == token_type::number_int);
 }
 
 TEST_CASE("lexer: datetime takes precedence over the '-' operator") {
   tavl::parser p;
-  p.add_math_default_operators();              // '-' зарегистрирован, но дата не должна расщепиться
+  p.add_math_default_operators();              // '-' is registered, but datetime must not split
   const auto evs = tavl_test::poll_all(p, "[2026-06-14T12:30:00]");
   const auto t = tavl_test::got_token_types(evs);
   REQUIRE(t.size() == 1);
@@ -83,7 +83,7 @@ TEST_CASE("lexer: comments do not appear in the data") {
 
 TEST_CASE("lexer: values are converted via parser::to_*") {
   tavl::parser p;
-  // соберём токены из массива и проверим преобразования
+  // Collect tokens from an array and verify conversions.
   p.clear();
   p.flush("[true, -42, 0xFF, 3.5, \"hi\\nthere\", 2026-06-14T12:30:00]");
   p.finish();
@@ -100,7 +100,7 @@ TEST_CASE("lexer: values are converted via parser::to_*") {
   CHECK(p.to_int(toks[1]) == -42);
   CHECK(p.to_uint(toks[2]) == 0xFFu);
   CHECK(p.to_float(toks[3]) == doctest::Approx(3.5));
-  CHECK(p.to_string(toks[4]) == "hi\nthere");         // \n разэкранирован
+  CHECK(p.to_string(toks[4]) == "hi\nthere");         // \n unescaped
   const auto dt = p.to_datetime(toks[5]);
   REQUIRE(dt.has_value());
   CHECK(dt->y == 2026);
@@ -125,7 +125,7 @@ TEST_CASE("lexer: byte-by-byte streaming yields the same token stream as all at 
   tavl::parser whole;
   const auto a = tavl_test::got_token_types(tavl_test::poll_all(whole, src));
 
-  // по байту
+  // byte by byte
   tavl::parser stream;
   stream.clear();
   std::vector<token_type> b;

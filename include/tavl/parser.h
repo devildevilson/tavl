@@ -59,7 +59,6 @@ struct block_frame {
   inline bool has_row() const { return has_identifier() || op.exists() || has_value(); }
 };
 
-// наверное было бы неплохо игнорировать \n как токен конца строки - отдельная настройка
 struct parser {
   struct pending_event {
     struct event event;
@@ -80,15 +79,15 @@ struct parser {
   void finish();
 
   std::tuple<event, error> poll_event();
-  event peek();             // не-снимающий lookahead: следующее событие без снятия с очереди
+  event peek();             // non-consuming lookahead
 
-  // --- освобождение прочитанного ввода (стриминг) ---
-  // нижняя граница ещё нужных байт: начало текущего токена лексера и старейшее событие в очереди.
-  // НЕ учитывает lookahead уровня deserialize - там зови tavl::release_consumed(p, ctx).
+  // --- releasing consumed input for streaming ---
+  // Lower bound of still-needed bytes: current lexer token start and the oldest queued event.
+  // Does not account for deserialize-level lookahead; call tavl::release_consumed(p, ctx) there.
   size_t consumed_offset() const;
-  void release_before(size_t offset);   // освободить байты ввода до offset (после - content() для них пуст)
+  void release_before(size_t offset);   // after release, content() for discarded spans is empty
 
-  // режимы блоков наследуются вложенными блоками
+  // Block modes are inherited by nested blocks.
   void override_next_block_modes(parse_mode object, parse_mode tuple, parse_mode array);
   void clear_pending_block_modes();
 
@@ -110,10 +109,9 @@ struct parser {
   std::optional<int64_t> to_int(const token& t) const;
   std::optional<uint64_t> to_uint(const token& t) const;
   std::optional<double> to_float(const token& t) const;
-  // дата? пусть это будет тот объект, пусть пользователь распарсит более аккуратно
   std::optional<iso_datetime> to_datetime(const token& t) const;
 
-  void fill_events();       // наполнить очередь events хотя бы одним событием
+  void fill_events();       // fill the event queue with at least one event when possible
   void emit(const event& ev, error err = error{});
   source_span row_span(const block_frame& f, const token& fallback) const;
   void close_row(const token& end_tok);

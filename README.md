@@ -30,7 +30,8 @@ minimal escaping), double-quoted strings `"..."` (standard escapes + `\u`/`\U` u
 ISO `datetime` (`T` or `_` between date and time, optional fraction and timezone), identifiers
 (`[A-Za-z_][A-Za-z0-9_.]*`), registered operators, and line `//` / block `/* */` comments.
 
-See [`tests/format/`](tests/format) for commented, runnable examples of every type and feature.
+See [`tests/format/`](tests/format) for commented, runnable examples of the format. Those files are
+part of the test suite, so the documented syntax is continuously parsed by `tavl_tests`.
 
 ```tavl
 window = {
@@ -54,7 +55,7 @@ ctest --test-dir build --output-on-failure   # run the test suite
 ```
 
 The main artifact is the static library **`tavl`**; the test runner is **`tavl_tests`**.
-Disable tests with `-DBUILD_TESTING=OFF`.
+Disable tests with `-DTAVL_BUILD_TESTS=OFF`.
 
 ## Using the library
 

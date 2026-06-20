@@ -17,6 +17,14 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 add_library(tavl_options INTERFACE)
 target_compile_features(tavl_options INTERFACE cxx_std_20)
+
+set(TAVL_LTO_OPTION "-flto")
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set(TAVL_LTO_OPTION "-flto=auto")
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(TAVL_LTO_OPTION "-flto=thin")
+endif()
+
 target_compile_options(tavl_options INTERFACE
   $<$<CONFIG:Debug>:$<$<CXX_COMPILER_ID:MSVC>:/arch:AVX /MDd /Zi /Wall /wd5045 /wd4820 /wd4514 /GR- /permissive- /Zc:preprocessor>>
   $<$<CONFIG:Release>:$<$<CXX_COMPILER_ID:MSVC>:/arch:AVX /MD /Wall /wd5045 /wd4820 /O2 /GR- /permissive- /Zc:preprocessor>>
@@ -24,9 +32,9 @@ target_compile_options(tavl_options INTERFACE
   $<$<CONFIG:RelWithDebInfo>:$<$<CXX_COMPILER_ID:MSVC>:/arch:AVX /MDd /ZI /Wall /wd5045 /wd4820 /O2 /GR- /permissive- /Zc:preprocessor>>
 
   $<$<CONFIG:Debug>:$<$<CXX_COMPILER_ID:GNU,Clang>:-mavx -g -Wall -Wextra -fno-rtti -fno-inline>>
-  $<$<CONFIG:Release>:$<$<CXX_COMPILER_ID:GNU,Clang>:-mavx -O3 -Wall -Wextra -fno-rtti -pipe -flto>>
-  $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU,Clang>:-mavx -O3 -Wall -Wextra -fno-rtti -pipe -flto -s>>
-  $<$<CONFIG:RelWithDebInfo>:$<$<CXX_COMPILER_ID:GNU,Clang>:-mavx -O3 -g -Wall -Wextra -fno-rtti -pipe -flto>>
+  $<$<CONFIG:Release>:$<$<CXX_COMPILER_ID:GNU,Clang>:-mavx -O3 -Wall -Wextra -fno-rtti -pipe ${TAVL_LTO_OPTION}>>
+  $<$<CONFIG:MinSizeRel>:$<$<CXX_COMPILER_ID:GNU,Clang>:-mavx -O3 -Wall -Wextra -fno-rtti -pipe ${TAVL_LTO_OPTION} -s>>
+  $<$<CONFIG:RelWithDebInfo>:$<$<CXX_COMPILER_ID:GNU,Clang>:-mavx -O3 -g -Wall -Wextra -fno-rtti -pipe ${TAVL_LTO_OPTION}>>
 )
 target_compile_definitions(tavl_options INTERFACE
   $<$<CONFIG:Debug>:>

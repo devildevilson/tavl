@@ -1,4 +1,4 @@
-// Парсер: блоки, режимы строк, подмена parse_mode.
+// Parser: blocks, row modes, parse_mode override.
 
 #include <doctest/doctest.h>
 
@@ -31,7 +31,7 @@ TEST_CASE("parser: object_like extracts the row identifier and operator") {
 
   CHECK(tavl_test::count_event(evs, event_type::got_row_identifier) == 1);
   CHECK(tavl_test::count_event(evs, event_type::got_row_operator)   == 1);
-  CHECK(tavl_test::count_event(evs, event_type::got_token)          == 1);   // только значение
+  CHECK(tavl_test::count_event(evs, event_type::got_token)          == 1);   // value only
 }
 
 TEST_CASE("parser: array (data_driven) treats all tokens as data") {
@@ -69,11 +69,11 @@ TEST_CASE("parser: override_next_block_modes changes the mode of the next block"
   tavl::parser p;
   p.add_default_operator();
 
-  // по умолчанию {} -> object_like: есть got_row_identifier
+  // By default {} is object_like and emits got_row_identifier.
   const auto def = tavl_test::poll_all(p, "{ k = v }");
   REQUIRE(tavl_test::count_event(def, event_type::got_row_identifier) == 1);
 
-  // подменяем object -> data_driven: идентификатор строки не выделяется
+  // Override object -> data_driven: row identifier is not separated.
   p.clear();
   p.add_default_operator();
   p.override_next_block_modes(parse_mode::data_driven, parse_mode::tuple_like, parse_mode::data_driven);
@@ -93,7 +93,7 @@ TEST_CASE("parser: the mode override is inherited by descendants") {
   tavl::parser p;
   p.add_default_operator();
   p.override_next_block_modes(parse_mode::data_driven, parse_mode::tuple_like, parse_mode::data_driven);
-  p.flush("{ a = { b = c } }");   // оба {} -> data_driven (внутренний наследует карту)
+  p.flush("{ a = { b = c } }");   // both {} are data_driven; the inner one inherits the map
   p.finish();
 
   std::vector<tavl_test::ev_err> evs;
@@ -102,14 +102,14 @@ TEST_CASE("parser: the mode override is inherited by descendants") {
     evs.push_back({ev, err});
     if (ev.type == event_type::eof) break;
   }
-  CHECK(tavl_test::count_event(evs, event_type::got_row_identifier) == 0);   // ни в одном блоке
+  CHECK(tavl_test::count_event(evs, event_type::got_row_identifier) == 0);   // no block extracts identifiers
   CHECK(tavl_test::count_event(evs, event_type::object_begin) == 2);
 }
 
 TEST_CASE("parser: a row identifier can be any token except brackets") {
   tavl::parser p;
   p.add_default_operator();
-  // первый токен-неоператор каждой строки становится идентификатором независимо от типа
+  // First non-operator token of each row becomes the identifier, regardless of token type.
   const auto evs = tavl_test::poll_all(p, "42 = a\n\"k\" = b\n2026-01-01 = c\ntrue = d");
 
   std::vector<token_type> ids;
@@ -117,9 +117,9 @@ TEST_CASE("parser: a row identifier can be any token except brackets") {
     if (e.event.type == event_type::got_row_identifier) ids.push_back(e.event.token.type);
 
   REQUIRE(ids.size() == 4);
-  CHECK(ids[0] == token_type::number_int);          // число
-  CHECK(ids[1] == token_type::doublequote_string);  // строка
-  CHECK(ids[2] == token_type::datetime);            // дата
+  CHECK(ids[0] == token_type::number_int);          // number
+  CHECK(ids[1] == token_type::doublequote_string);  // string
+  CHECK(ids[2] == token_type::datetime);            // date
   CHECK(ids[3] == token_type::boolean);             // boolean
 }
 
@@ -168,5 +168,5 @@ TEST_CASE("document separator: //--- inside a string is not a separator") {
     if (tavl::is_document_separator(p, ev.token)) any_sep = true;
     if (ev.type == event_type::eof) break;
   }
-  CHECK_FALSE(any_sep);   // это строковый токен, а не комментарий
+  CHECK_FALSE(any_sep);   // string token, not a comment
 }

@@ -18,11 +18,9 @@ static bool is_end_block(const enum event_type type) {
     type == event_type::pair_end;
 }
 
-// Пропускаем остаток текущей строки (например, после ошибки в ней):
-// читаем события, считая вложенность блоков, пока не встретим row_end на нулевой
-// вложенности. Счётчик вложенности живёт в парсере (p.ignore_depth), чтобы пережить
-// возврат not_enought_data и продолжиться при следующем вызове.
-// Возвращает row_end / not_enought_data / eof (ошибку при этом не отдаём).
+// Skip the rest of the current row, for example after a row-level error. We count nested blocks
+// until row_end at zero depth. The counter lives in parser so the skip survives not_enought_data.
+// Returns row_end / not_enought_data / eof and intentionally discards attached errors.
 std::tuple<event, error> ignore_to_row_end(parser& p) {
   while (true) {
     const auto [ev, err] = p.poll_event();
@@ -48,7 +46,7 @@ std::tuple<event, error> ignore_to_row_end(parser& p) {
   return {};
 }
 
-// разделитель документов: токен-комментарий, чьё содержимое (без хвостовых пробелов) == "//---"
+// Document separator: a line-comment token whose trimmed content is exactly "//---".
 bool is_document_separator(const parser& p, const token& t) {
   if (t.type != token_type::line_comment) return false;
   auto s = p.content(t.span);
@@ -56,7 +54,7 @@ bool is_document_separator(const parser& p, const token& t) {
   return s == document_separator;
 }
 
-// нельзя просто делать реверс иначе поменяются местами вещи внутри пары
+// A plain reverse would swap children inside pairs; rebuild the reversed RPN by subtrees.
 static void reverse_rpn(ast_context& ctx, std::vector<node>& ast_nodes) {
   ctx.support.insert(ctx.support.begin(), ctx.rpn_output.begin(), ctx.rpn_output.end());
   ctx.rpn_output.clear();
@@ -78,8 +76,8 @@ static void reverse_rpn(ast_context& ctx, std::vector<node>& ast_nodes) {
 
   ctx.support.clear();
 
-  // capacity-aware: строка добавляется ЦЕЛИКОМ (узлов = op_stack.size()) либо не добавляется -
-  // если не влезает в ast_nodes.capacity(), помечаем output_full и не пишем (без реаллокации)
+  // Capacity-aware mode is atomic per row: append all nodes or none. On overflow, mark output_full
+  // and avoid reallocating ast_nodes.
   if (ctx.bounded_output && ast_nodes.size() + ctx.op_stack.size() > ast_nodes.capacity()) {
     ctx.output_full = true;
     ctx.op_stack.clear();
@@ -117,27 +115,25 @@ static void reverse_rpn(ast_context& ctx, std::vector<node>& ast_nodes) {
 
 
 
-// Курсор i идёт по ctx.op_stack (плоский поток с маркерами скобок/строк), дописывая
-// postfix в ctx.rpn_output и возвращая footprint узла (= слотов в плоском rpn = 1 + потомки).
-// Грамматика (все операторы равны): оператор бинарный, правоассоц., без приоритета,
-// rhs = ВЕСЬ остаток текущей строки (рекурсивно), lhs = операнд прямо перед ним.
-// Свободные операнды (+ результаты) собираются в node_type::row, если их >1.
-// footprint считаем из counter'ов (без отдельного вектора).
+// Cursor i walks ctx.op_stack (a flat event stream with row/bracket markers), appends postfix nodes
+// to ctx.rpn_output, and returns the subtree footprint. Grammar: all operators are equal,
+// binary, right-associative, and bind rhs to the whole remaining row. Free operands are grouped
+// into node_type::row when there is more than one. Footprints are computed from counters directly.
 static size_t ast_reduce_row(ast_context& ctx, size_t& i, const token& row_tok);
 
-// Сворачивает скобочную группу (i указывает на *_begin): дети - строки внутри, узел -
-// tuple/object/array. Возвращает footprint, потребляет до парного *_end включительно.
+// Reduce a bracket group starting at *_begin: children are the rows inside, root is tuple/object/array.
+// Returns footprint and consumes through the matching *_end.
 static size_t ast_reduce_bracket(ast_context& ctx, size_t& i, [[maybe_unused]] const token& row_tok) {
   const auto open = ctx.op_stack[i];
-  i += 1;                                                  // съели *_begin
-  size_t sum = 0;                                          // footprint детей-строк
+  i += 1;                                                  // consume *_begin
+  size_t sum = 0;                                          // child-row footprints
   while (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::row_begin) {
-    i += 1;                                                // съели row_begin
+    i += 1;                                                // consume row_begin
     sum += ast_reduce_row(ctx, i, open.event.token);
     if (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::row_end) i += 1;
   }
-  if (i < ctx.op_stack.size() && is_end_block(ctx.op_stack[i].event.type)) i += 1;  // съели *_end
-  ctx.rpn_output.push_back(ast_context::event_args{open.event, sum});   // узел tuple/object/array
+  if (i < ctx.op_stack.size() && is_end_block(ctx.op_stack[i].event.type)) i += 1;  // consume *_end
+  ctx.rpn_output.push_back(ast_context::event_args{open.event, sum});   // tuple/object/array node
   return 1 + sum;
 }
 
@@ -145,43 +141,40 @@ static size_t ast_reduce_row(ast_context& ctx, size_t& i, const token& row_tok) 
   size_t row_sum = 0, row_n = 0;
   while (i < ctx.op_stack.size()) {
     const auto type = ctx.op_stack[i].event.type;
-    if (type == event_type::row_end || is_end_block(type)) break;     // конец строки/группы
+    if (type == event_type::row_end || is_end_block(type)) break;     // end of row/group
 
     size_t operand_fp;
-    if (is_begin_block(type) && type != event_type::row_begin) {      // ( { [ -> подгруппа
+    if (is_begin_block(type) && type != event_type::row_begin) {      // ( { [ -> subgroup
       operand_fp = ast_reduce_bracket(ctx, i, row_tok);
     } else {
-      ctx.rpn_output.push_back(ast_context::event_args{ctx.op_stack[i].event, 0});  // лист
+      ctx.rpn_output.push_back(ast_context::event_args{ctx.op_stack[i].event, 0});  // leaf
       operand_fp = 1;
       i += 1;
     }
 
     if (i < ctx.op_stack.size() && ctx.op_stack[i].event.token.type == token_type::op) {
       const auto op = ctx.op_stack[i];
-      i += 1;                                                         // съели оператор
-      const size_t rhs_fp = ast_reduce_row(ctx, i, row_tok);          // rhs = остаток строки
+      i += 1;                                                         // consume operator
+      const size_t rhs_fp = ast_reduce_row(ctx, i, row_tok);          // rhs is the remaining row
       const size_t count = operand_fp + rhs_fp;
       ctx.rpn_output.push_back(ast_context::event_args{op.event, count});
       row_sum += 1 + count; row_n += 1;
-      break;                                                          // остаток поглощён
+      break;                                                          // remainder consumed
     }
-    row_sum += operand_fp; row_n += 1;                                // свободный операнд
+    row_sum += operand_fp; row_n += 1;                                // free operand
   }
 
-  if (row_n <= 1) return row_sum;   // один элемент (или пусто) - без обёртки row
+  if (row_n <= 1) return row_sum;   // one element (or empty): no row wrapper
   ctx.rpn_output.push_back(ast_context::event_args{event{event_type::row_begin, row_tok}, row_sum});
   return 1 + row_sum;
 }
 
-// Накопление ОДНОЙ строки в ctx.op_stack (операнды/операторы/маркеры скобок и вложенных
-// строк). Всё состояние - в ctx, поэтому иммунно к not_enought_data. Детектит неуместный
-// оператор (нет lhs / висящий) на ЛЮБОМ уровне: expect_operand сбрасывается на границах
-// строк/скобок; при ошибке -> ctx.had_error и режим пропуска до своего row_end.
-// Возвращает not_enought_data (строка не дочитана, состояние в ctx) либо терминатор строки
-// (row_end вне скобок / eof). Общий для make_pair_ast и make_tag_ast (различается лишь свёртка).
+// Collect one row into ctx.op_stack (operands, operators, bracket markers, nested rows). All state
+// lives in ctx, so not_enought_data is resumable. Misplaced operators are detected at any level:
+// expect_operand resets at row/bracket boundaries; on error we skip through this row's row_end.
+// Returns not_enought_data or the row terminator (outer row_end / eof). Shared by pair/tag AST.
 static event ast_collect_row(parser& p, ast_context& ctx, bool detect_misplaced = true) {
-  // detect_misplaced=false для матразбора: префиксные операторы валидны на позиции операнда,
-  // поэтому проверку «неуместный оператор» отключаем, просто буферизуем (ошибки ловит Pratt).
+  // For math parsing, prefix operators are valid where operands are expected; Pratt reports errors.
   event ev; error err;
   std::tie(ev, err) = p.poll_event();
   while (true) {
@@ -190,19 +183,19 @@ static event ast_collect_row(parser& p, ast_context& ctx, bool detect_misplaced 
     if ((ev.type == event_type::row_end && ctx.nest_counter == 0) || ev.type == event_type::eof) {
       if (detect_misplaced && !ctx.had_error && !ctx.op_stack.empty() &&
           ctx.op_stack.back().event.token.type == token_type::op) {
-        ctx.had_error = true;   // висящий оператор в конце строки
+        ctx.had_error = true;   // dangling operator at end of row
       }
       return ev;
     }
 
-    // жёсткий лимит токенов строки: дальше не копим - уходим в режим пропуска до row_end
+    // Hard per-row token limit: stop collecting and skip to row_end.
     if (!ctx.had_error && ctx.op_stack.size() >= limits::max_row_tokens) {
       ctx.had_error = true;
       ctx.row_too_long = true;
     }
 
     if (ctx.had_error) {
-      // режим пропуска: следим только за глубиной скобок, чтобы поймать наш row_end
+      // Skip mode: track only bracket depth so we stop at this row's row_end.
       if (ev.type == event_type::tuple_begin || ev.type == event_type::object_begin ||
           ev.type == event_type::array_begin) ctx.nest_counter += 1;
       else if (ev.type == event_type::tuple_end || ev.type == event_type::object_end ||
@@ -222,40 +215,40 @@ static event ast_collect_row(parser& p, ast_context& ctx, bool detect_misplaced 
     else if (ev.type == event_type::tuple_end || ev.type == event_type::object_end ||
              ev.type == event_type::array_end) {
       ctx.nest_counter -= 1;
-      ctx.expect_operand = false;    // скобка-группа = операнд родителя
+      ctx.expect_operand = false;    // a bracket group is an operand of the parent
       ctx.op_stack.push_back(ast_context::event_args{ev, 0});
     }
 
     else if (ev.type == event_type::row_begin) {
       if (ctx.nest_counter == 0) {
-        if (!ctx.got_start) { ctx.row_start = ev.token.span; ctx.got_start = true; }  // метка строки, не операнд
+        if (!ctx.got_start) { ctx.row_start = ev.token.span; ctx.got_start = true; }  // row marker, not an operand
       } else {
-        ctx.expect_operand = true;   // новая под-строка в скобках
+        ctx.expect_operand = true;   // new nested row inside brackets
         ctx.op_stack.push_back(ast_context::event_args{ev, 0});
       }
     }
 
     else if (ev.type == event_type::row_end) {
       if (detect_misplaced && !ctx.op_stack.empty() && ctx.op_stack.back().event.token.type == token_type::op) {
-        ctx.had_error = true;        // висящий оператор в под-строке
+        ctx.had_error = true;        // dangling operator in a nested row
       } else {
         ctx.op_stack.push_back(ast_context::event_args{ev, 0});
       }
     }
 
     else if (ev.type == event_type::empty_row || ev.type == event_type::got_comment) {
-      // в AST не участвуют
+      // Not represented in AST.
     }
 
-    else if (ev.token.type == token_type::op) {     // оператор
-      if (detect_misplaced && ctx.expect_operand) ctx.had_error = true; // нет lhs -> неуместный оператор
+    else if (ev.token.type == token_type::op) {     // operator
+      if (detect_misplaced && ctx.expect_operand) ctx.had_error = true; // no lhs
       else {
         ctx.expect_operand = true;
         ctx.op_stack.push_back(ast_context::event_args{ev, 0});
       }
     }
 
-    else {                                          // операнд (токен)
+    else {                                          // operand token
       if (!ctx.got_start) { ctx.row_start = ev.token.span; ctx.got_start = true; }
       ctx.expect_operand = false;
       ctx.op_stack.push_back(ast_context::event_args{ev, 0});
@@ -265,7 +258,7 @@ static event ast_collect_row(parser& p, ast_context& ctx, bool detect_misplaced 
   }
 }
 
-// Сброс per-row состояния ctx (после завершения разбора строки).
+// Reset per-row state after a completed row.
 static void ast_reset_row(ast_context& ctx) {
   ctx.nest_counter = 0;
   ctx.expect_operand = true;
@@ -273,11 +266,11 @@ static void ast_reset_row(ast_context& ctx) {
   ctx.had_error = false;
   ctx.row_too_long = false;
   ctx.output_full = false;
-  // bounded_output НЕ сбрасываем - это настройка вызывающего, живёт между строками
+  // Keep bounded_output; it is a caller option across rows.
 }
 
-// Ошибка строки со span на весь её размах. Тип: err_row_too_long при превышении лимита токенов,
-// иначе err_misplaced_operator (неуместный/висящий оператор).
+// Row error spanning the whole row. err_row_too_long for token-limit overflow, otherwise misplaced
+// or dangling operator.
 static error ast_row_error(const ast_context& ctx, const event& end_ev) {
   const size_t s = ctx.row_start.offset;
   const size_t e = end_ev.token.span.offset;
@@ -286,9 +279,8 @@ static error ast_row_error(const ast_context& ctx, const event& end_ev) {
 }
 
 std::tuple<event, error> make_pair_ast(parser& p, ast_context& ctx, std::vector<node>& ast_nodes) {
-  // Простое AST: все операторы равны, бинарные, правоассоц., без приоритета; rhs = весь остаток;
-  // свободные операнды -> row; скобки -> tuple/object/array. Иммунно к not_enought_data,
-  // ошибки на любом уровне (см. ast_collect_row).
+  // Simple AST: all operators are equal, binary, right-associative, no precedence; rhs is the
+  // remaining row, free operands become row, brackets become tuple/object/array.
   const event ev = ast_collect_row(p, ctx);
   if (ev.type == event_type::not_enought_data) return {ev, error{}};
 
@@ -307,13 +299,12 @@ std::tuple<event, error> make_pair_ast(parser& p, ast_context& ctx, std::vector<
   return result;
 }
 
-// --- make_tag_ast: XML/HCL-подобные теги ---
-// Тег/данные для КАЖДОЙ строки решает диспетчер ast2_reduce_row ПО ТИПУ ПЕРВОГО ИВИНТА
-// основного парсера (поведение следует из block_frame::type, не хардкодится тут):
-//   got_row_identifier -> ТЕГ-строка: p(тег, r(данные)), rhs ВСЕГДА row (оператор = got_row_operator
-//     либо синтетический token{}); иначе -> ДАННЫЕ-строка.
-// ДАННЫЕ: одиночный токен -> токен; k=v -> атрибут-пара p(k, value), value = один элемент (правоассоц.).
-// Отсюда: object всегда теги; array всегда данные; tuple - тег при значении (id=v), иначе данные (v).
+// --- make_tag_ast: XML/HCL-like tags ---
+// Each row is classified by its first parser event, so behavior follows block_frame::row_mode instead
+// of being hardcoded here. got_row_identifier means a tag row: pair(tag, row(data)); the rhs is always
+// a row, with got_row_operator or a synthetic token{} as the pair operator. Other rows are data rows.
+// Data rows: a lone token is a token; k=v becomes an attribute pair, right-associative. Therefore
+// objects are always tags, arrays are always data, and tuples are tags only for id=value rows.
 static size_t ast2_reduce_value(ast_context& ctx, size_t& i, const token& row_tok);
 static size_t ast2_reduce_data_row(ast_context& ctx, size_t& i, const token& row_tok);
 static size_t ast2_reduce_tag_row(ast_context& ctx, size_t& i, const token& row_tok);
@@ -325,7 +316,7 @@ static size_t ast2_reduce_bracket(ast_context& ctx, size_t& i, [[maybe_unused]] 
   size_t sum = 0;
   while (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::row_begin) {
     i += 1;
-    sum += ast2_reduce_row(ctx, i, open.event.token);   // тег/данные - по первому ивенту строки
+    sum += ast2_reduce_row(ctx, i, open.event.token);   // tag/data by first row event
     if (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::row_end) i += 1;
   }
   if (i < ctx.op_stack.size() && is_end_block(ctx.op_stack[i].event.type)) i += 1;
@@ -339,7 +330,7 @@ static size_t ast2_reduce_value(ast_context& ctx, size_t& i, const token& row_to
   if (is_begin_block(type) && type != event_type::row_begin) {
     primary_fp = ast2_reduce_bracket(ctx, i, row_tok);
   } else {
-    ctx.rpn_output.push_back(ast_context::event_args{ctx.op_stack[i].event, 0});   // лист
+    ctx.rpn_output.push_back(ast_context::event_args{ctx.op_stack[i].event, 0});   // leaf
     primary_fp = 1;
     i += 1;
   }
@@ -347,9 +338,9 @@ static size_t ast2_reduce_value(ast_context& ctx, size_t& i, const token& row_to
   if (i < ctx.op_stack.size() && ctx.op_stack[i].event.token.type == token_type::op) {
     const auto op = ctx.op_stack[i];
     i += 1;
-    const size_t rhs_fp = ast2_reduce_value(ctx, i, row_tok);   // правоассоц., rhs = один элемент
+    const size_t rhs_fp = ast2_reduce_value(ctx, i, row_tok);   // right-assoc, rhs is one value
     const size_t count = primary_fp + rhs_fp;
-    ctx.rpn_output.push_back(ast_context::event_args{op.event, count});   // атрибут-пара
+    ctx.rpn_output.push_back(ast_context::event_args{op.event, count});   // attribute pair
     return 1 + count;
   }
   return primary_fp;
@@ -369,19 +360,19 @@ static size_t ast2_reduce_data_row(ast_context& ctx, size_t& i, const token& row
 }
 
 static size_t ast2_reduce_tag_row(ast_context& ctx, size_t& i, const token& row_tok) {
-  // тег = got_row_identifier (диспетчер вызвал нас именно по этому ивенту)
+  // Tag is the got_row_identifier event that selected this reducer.
   ctx.rpn_output.push_back(ast_context::event_args{ctx.op_stack[i].event, 0});
   i += 1;
   const size_t tag_fp = 1;
 
-  // оператор пары тега = got_row_operator (если есть), иначе синтетический token{}
+  // Tag pair operator is got_row_operator when present, otherwise synthetic token{}.
   event op_ev{event_type::got_row_operator, token{}};
   if (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::got_row_operator) {
     op_ev = ctx.op_stack[i].event;
     i += 1;
   }
 
-  // rhs = данные остатка, ВСЕГДА обёрнуты в row (так ТЕГ отличим от ДАННЫХ)
+  // rhs is the remaining data, always wrapped in row so a tag is distinguishable from data.
   size_t row_sum = 0;
   while (i < ctx.op_stack.size()) {
     const auto type = ctx.op_stack[i].event.type;
@@ -392,13 +383,12 @@ static size_t ast2_reduce_tag_row(ast_context& ctx, size_t& i, const token& row_
   const size_t rhs_fp = 1 + row_sum;
 
   const size_t count = tag_fp + rhs_fp;
-  ctx.rpn_output.push_back(ast_context::event_args{op_ev, count});   // пара тега
+  ctx.rpn_output.push_back(ast_context::event_args{op_ev, count});   // tag pair
   return 1 + count;
 }
 
-// Диспетчер строки: первый ивент got_row_identifier -> ТЕГ, иначе -> ДАННЫЕ.
-// Так тег/данные следуют из block_frame::type через типы ивентов основного парсера
-// (object всегда got_row_identifier; tuple - только при наличии значения; array - никогда).
+// Row dispatcher: first event got_row_identifier -> tag, otherwise data. This lets tag/data behavior
+// follow parser event types (object always tag; tuple only when id=value; array never).
 static size_t ast2_reduce_row(ast_context& ctx, size_t& i, const token& row_tok) {
   if (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::got_row_identifier)
     return ast2_reduce_tag_row(ctx, i, row_tok);
@@ -424,17 +414,17 @@ std::tuple<event, error> make_tag_ast(parser& p, ast_context& ctx, std::vector<n
   return result;
 }
 
-// --- make_math_ast: матвыражения с приоритетом ---
-// Pratt/precedence-climbing над буфером op_stack (block_type игнорируем - важны токены, операторы,
-// скобки). Дерево = прямая польская p OP (lhs, rhs) -> reverse_rpn. Операторы только
-// зарегистрированные, по фиксности (operator_info(str, fixity)). Скобки единообразны: содержимое =
-// аргументы через запятую, 1 -> сам аргумент, >1 -> tuple/object/array. Токен/группа перед скобкой
-// -> вызов функции pC(func, args) (узел-пара с token{}). Унарный узел = пара с одним ребёнком.
-// Бинарные левоассоциативны (next_min = prec+1), префиксные правоассоциативны.
+// --- make_math_ast: precedence-aware expressions ---
+// Pratt / precedence-climbing over op_stack. Block types are ignored; tokens, operators, and
+// brackets are what matter. We build prefix-polish pair nodes, then reverse_rpn converts them to
+// the flat AST layout. Operators must be registered and are looked up by fixity. Brackets are
+// uniform: comma-separated rows are arguments; one argument collapses to itself, several become the
+// bracket block node. primary followed by brackets is a function-call pair with synthetic token{}.
+// Binary operators are left-associative by default; prefix operators are right-associative.
 static size_t math_parse_expr(parser& p, ast_context& ctx, size_t& i, int min_prec);
 static size_t math_parse_bracket(parser& p, ast_context& ctx, size_t& i);
 
-// оператор ли op_stack[i] с данной фиксностью? (метаданные из parser::operator_info)
+// Is op_stack[i] an operator with the requested fixity? Metadata comes from parser::operator_info.
 static bool math_op_at(const parser& p, const ast_context& ctx, size_t i, op_fixity fixity, op_info& out) {
   if (i >= ctx.op_stack.size()) return false;
   const auto& tok = ctx.op_stack[i].event.token;
@@ -448,7 +438,7 @@ static bool math_op_at(const parser& p, const ast_context& ctx, size_t i, op_fix
 static bool math_bracket_at(const ast_context& ctx, size_t i) {
   if (i >= ctx.op_stack.size()) return false;
   const auto t = ctx.op_stack[i].event.type;
-  return is_begin_block(t) && t != event_type::row_begin;   // () {} [] - единообразно
+  return is_begin_block(t) && t != event_type::row_begin;   // () {} [] are uniform here
 }
 
 static bool math_expr_end_at(const ast_context& ctx, size_t i) {
@@ -457,7 +447,7 @@ static bool math_expr_end_at(const ast_context& ctx, size_t i) {
   return t == event_type::row_end || is_end_block(t);
 }
 
-// primary: группа в скобках либо лист-токен
+// primary: bracket group or leaf token
 static size_t math_parse_primary(parser& p, ast_context& ctx, size_t& i) {
   if (math_expr_end_at(ctx, i)) {
     ctx.had_error = true;
@@ -470,12 +460,12 @@ static size_t math_parse_primary(parser& p, ast_context& ctx, size_t& i) {
     return 0;
   }
 
-  ctx.rpn_output.push_back(ast_context::event_args{ctx.op_stack[i].event, 0});   // лист
+  ctx.rpn_output.push_back(ast_context::event_args{ctx.op_stack[i].event, 0});   // leaf
   i += 1;
   return 1;
 }
 
-// постфикс + вызов функции (скобка сразу после primary)
+// postfix operators and function calls (bracket immediately after primary)
 static size_t math_parse_postfix(parser& p, ast_context& ctx, size_t& i) {
   size_t fp = math_parse_primary(p, ctx, i);
   if (fp == 0) return 0;
@@ -483,10 +473,10 @@ static size_t math_parse_postfix(parser& p, ast_context& ctx, size_t& i) {
     op_info info;
     if (math_op_at(p, ctx, i, op_fixity::postfix, info)) {
       const auto op = ctx.op_stack[i].event; i += 1;
-      ctx.rpn_output.push_back(ast_context::event_args{op, fp});   // унарный постфикс: 1 ребёнок
+      ctx.rpn_output.push_back(ast_context::event_args{op, fp});   // unary postfix, one child
       fp = 1 + fp;
     } else if (math_bracket_at(ctx, i)) {
-      const size_t args_fp = math_parse_bracket(p, ctx, i);        // вызов функции
+      const size_t args_fp = math_parse_bracket(p, ctx, i);        // function call
       const size_t count = fp + args_fp;
       ctx.rpn_output.push_back(ast_context::event_args{event{event_type::got_row_operator, token{}}, count}); // pC, token{}
       fp = 1 + count;
@@ -495,7 +485,7 @@ static size_t math_parse_postfix(parser& p, ast_context& ctx, size_t& i) {
   return fp;
 }
 
-// префиксные унарные (правоассоц.)
+// prefix unary operators, right-associative
 static size_t math_parse_prefix(parser& p, ast_context& ctx, size_t& i) {
   op_info info;
   if (math_op_at(p, ctx, i, op_fixity::prefix, info)) {
@@ -505,13 +495,13 @@ static size_t math_parse_prefix(parser& p, ast_context& ctx, size_t& i) {
       ctx.had_error = true;
       return 0;
     }
-    ctx.rpn_output.push_back(ast_context::event_args{op, operand_fp});   // унарный префикс: 1 ребёнок
+    ctx.rpn_output.push_back(ast_context::event_args{op, operand_fp});   // unary prefix, one child
     return 1 + operand_fp;
   }
   return math_parse_postfix(p, ctx, i);
 }
 
-// бинарные по приоритету (левоассоц.)
+// binary operators by precedence
 static size_t math_parse_expr(parser& p, ast_context& ctx, size_t& i, int min_prec) {
   size_t lhs = math_parse_prefix(p, ctx, i);
   if (lhs == 0) return 0;
@@ -520,7 +510,7 @@ static size_t math_parse_expr(parser& p, ast_context& ctx, size_t& i, int min_pr
     if (!math_op_at(p, ctx, i, op_fixity::binary, info)) break;
     if (info.precedence < min_prec) break;
     const auto op = ctx.op_stack[i].event; i += 1;
-    // левоассоц.: следующий уровень строже (prec+1); правоассоц.: тот же уровень (prec)
+    // Left-assoc: next level is stricter (prec+1). Right-assoc: same level.
     const int next_min = (info.assoc == op_assoc::right) ? info.precedence : info.precedence + 1;
     const size_t rhs = math_parse_expr(p, ctx, i, next_min);
     if (rhs == 0) {
@@ -534,25 +524,25 @@ static size_t math_parse_expr(parser& p, ast_context& ctx, size_t& i, int min_pr
   return lhs;
 }
 
-// скобка: аргументы через запятую (row_begin/row_end), 1 -> сам аргумент, >1/0 -> узел группы
+// Bracket: arguments are rows. One argument collapses to itself; >1 or 0 become a group node.
 static size_t math_parse_bracket(parser& p, ast_context& ctx, size_t& i) {
-  const auto open = ctx.op_stack[i].event; i += 1;   // съели *_begin
+  const auto open = ctx.op_stack[i].event; i += 1;   // consume *_begin
   size_t sum = 0, n = 0;
   while (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::row_begin) {
-    i += 1;                                           // съели row_begin
+    i += 1;                                           // consume row_begin
     sum += math_parse_expr(p, ctx, i, 0);
     if (ctx.had_error) return 0;
     n += 1;
     if (i < ctx.op_stack.size() && ctx.op_stack[i].event.type == event_type::row_end) i += 1;
   }
-  if (i < ctx.op_stack.size() && is_end_block(ctx.op_stack[i].event.type)) i += 1;   // съели *_end
-  if (n == 1) return sum;                            // один аргумент - без обёртки
+  if (i < ctx.op_stack.size() && is_end_block(ctx.op_stack[i].event.type)) i += 1;   // consume *_end
+  if (n == 1) return sum;                            // one argument: no wrapper
   ctx.rpn_output.push_back(ast_context::event_args{open, sum});   // tuple/object/array
   return 1 + sum;
 }
 
 std::tuple<event, error> make_math_ast(parser& p, ast_context& ctx, std::vector<node>& ast_nodes) {
-  const event ev = ast_collect_row(p, ctx, /*detect_misplaced=*/false);   // префиксы валидны
+  const event ev = ast_collect_row(p, ctx, /*detect_misplaced=*/false);   // prefixes are valid
 
   if (ev.type == event_type::not_enought_data) return {ev, error{}};
 
@@ -578,10 +568,10 @@ std::tuple<event, error> make_math_ast(parser& p, ast_context& ctx, std::vector<
   return result;
 }
 
-// --- node_view: нешаблонные методы (объявления в ext.h) ---
+// --- node_view non-template methods declared in ext.h ---
 
 const node& node_view::root() const {
-  static const node empty_node{};   // дефолт: type=invalid, token{}, child_count=0
+  static const node empty_node{};   // default invalid/token{}/child_count=0
   return nodes.empty() ? empty_node : nodes[0];
 }
 

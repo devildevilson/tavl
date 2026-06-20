@@ -2,8 +2,8 @@
 
 namespace tavl {
 
-// RAII внешнего кадра: на входе сбрасывает курсор/stalled; на СВЕЖЕЙ сессии (frames пуст)
-// чистит lookahead/диагностику.
+// Outer-call scope: reset cursor/stalled on entry; for a fresh session also clear lookahead and
+// diagnostics.
 ct_scope::ct_scope(ct_context& c) noexcept : ctx(c) {
   if (ctx.depth == 0) {
     ctx.cursor = 0;
@@ -46,7 +46,8 @@ event_type ds_block_end(event_type begin) {
   }
 }
 
-// skip-op + детект режима. Возвращает term: блок -> *_end (входим), россыпь токенов -> row_end, иначе default_term.
+// Skip a row operator and detect the current value boundary. Blocks return their matching *_end
+// after consuming the opener; bare token sequences stop at row_end; otherwise use default_term.
 static event_type ds_detect_term(parser& p, ct_context& ctx, event_type default_term) {
   event ev = ct_peek(p, ctx);
   if (ctx.stalled) return event_type::invalid;
@@ -65,8 +66,8 @@ size_t ds_enter(parser& p, ct_context& ctx, bool& resuming, event_type default_t
   resuming = false;
   const event_type t = ds_detect_term(p, ctx, default_term);
   if (ctx.stalled) return SIZE_MAX;
-  // глубина кадров ограничена вложенностью C++ ТИПА (не вводом); превышение лимита = патологически
-  // глубокий тип -> громко падаем (это не малформный ВВОД, а программерская структура)
+  // Frame depth is bounded by C++ type nesting, not input nesting. Exceeding it means a pathological
+  // program type rather than malformed input, so fail loudly.
   TAVL_CHECK(ctx.frames.size() < limits::max_nesting, "deserialize nesting exceeds limits::max_nesting");
   ctx.frames.push_back(ct_context::frame{});
   ctx.frames.back().term = t;

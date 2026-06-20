@@ -24,20 +24,20 @@ template <typename> struct ds_is_tuple : std::false_type {};
 template <typename... Ts> struct ds_is_tuple<std::tuple<Ts...>> : std::true_type {};
 template <typename> struct ds_is_std_array : std::false_type {};
 template <typename E, size_t N> struct ds_is_std_array<std::array<E, N>> : std::true_type {};
-// фиксированный строковый буфер: std::array<char,N> и char[N]
+// Fixed string buffers: std::array<char,N> and char[N].
 template <typename> struct ds_is_char_array : std::false_type {};
 template <size_t N> struct ds_is_char_array<std::array<char, N>> : std::true_type {};
 template <size_t N> struct ds_is_char_array<char[N]> : std::true_type {};
-// back-insertable (vector/list/deque); std::string обрабатывается раньше своей веткой
+// Back-insertable containers (vector/list/deque); std::string is handled earlier.
 template <typename T, typename = void> struct ds_has_push_back : std::false_type {};
 template <typename T>
 struct ds_has_push_back<T, std::void_t<decltype(std::declval<T&>().push_back(std::declval<typename T::value_type>()))>> : std::true_type {};
-// map (есть mapped_type) vs set (есть key_type, нет mapped_type)
+// Map has mapped_type; set-like containers only have key_type.
 template <typename T, typename = void> struct ds_is_map : std::false_type {};
 template <typename T> struct ds_is_map<T, std::void_t<typename T::mapped_type, typename T::key_type>> : std::true_type {};
 template <typename T, typename = void> struct ds_has_key_type : std::false_type {};
 template <typename T> struct ds_has_key_type<T, std::void_t<typename T::key_type>> : std::true_type {};
-// chrono: time_point<Clock,Dur> и duration<Rep,Period> (десериализуются из datetime-токена)
+// chrono time_point/duration, read from datetime tokens.
 template <typename> struct ds_is_duration : std::false_type {};
 template <typename R, typename P> struct ds_is_duration<std::chrono::duration<R, P>> : std::true_type {};
 template <typename> struct ds_is_time_point : std::false_type {};

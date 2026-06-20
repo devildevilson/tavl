@@ -29,7 +29,7 @@ public:
 
   span append(const std::string_view& data);
   void release_before(const size_t offset);
-  size_t buffer_size() const;   // живых байт в буфере (после release_before уменьшается)
+  size_t buffer_size() const;   // live bytes after release_before
 
   void clear();
 private:
@@ -62,7 +62,7 @@ public:
   void clear();
 
   bool finalizing() const noexcept;
-  size_t token_offset() const noexcept;   // абсолютное смещение начала текущего (ещё не выданного) токена
+  size_t token_offset() const noexcept;   // absolute offset of the current not-yet-emitted token
 
   std::optional<op_info> operator_info(const std::string_view& op, op_fixity fixity) const;
 private:
