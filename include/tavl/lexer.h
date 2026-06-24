@@ -39,8 +39,9 @@ private:
 
 struct lexer_state {
   enum lexer_mode mode = lexer_mode::standard;
-  uint32_t nesting_depth = 0;
+  uint32_t nesting_depth = 0;     // open block-comment levels; block comments nest
   bool escaped = false;
+  bool comment_delim = false;     // char at offset-1 was already used as a /* or */ half (no reuse)
   bool finalizing = false;
   source_span token_span = {0, 0, 1, 1};
   size_t offset = 0;

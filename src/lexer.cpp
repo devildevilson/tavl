@@ -120,6 +120,9 @@ token lexer::lex(const char_storage& storage) {
 
       if (prev == '/' && cur == '*') {
         state.mode = lexer_mode::block_comment;
+        state.nesting_depth = 1;
+        advance(cur);                 // consume the opening '*'
+        state.comment_delim = true;   // '*' already used as the open's second half
         break;
       }
 
@@ -308,28 +311,49 @@ token lexer::lex(const char_storage& storage) {
   }
 
   if (state.mode == lexer_mode::block_comment) {
+    // Block comments nest: a /* inside an open comment opens another level, and the comment only
+    // ends when the matching */ for the outermost /* is seen. comment_delim marks that the previous
+    // char was already used as a /* or */ half, so it can't be reused for an overlapping delimiter
+    // (e.g. the '*' in /*/ must not pair both ways). It is persisted in state to stay correct across
+    // streaming chunk boundaries.
     while (state.offset < storage.size()) {
-      const char prev = storage.peek(state.offset-1);
+      const char prev = state.comment_delim ? '\0' : storage.peek(state.offset-1);
       const char cur = storage.peek(state.offset);
+
+      if (prev == '/' && cur == '*') {
+        state.nesting_depth += 1;
+        advance(cur);
+        state.comment_delim = true;
+        continue;
+      }
 
       if (prev == '*' && cur == '/') {
         advance(cur);
+        state.nesting_depth -= 1;
+        state.comment_delim = true;
 
-        auto s = state.token_span;
-        s.size = state.offset - s.offset;
-        state.mode = lexer_mode::standard;
+        if (state.nesting_depth == 0) {
+          auto s = state.token_span;
+          s.size = state.offset - s.offset;
+          state.mode = lexer_mode::standard;
+          state.comment_delim = false;
 
-        state.token_span = {state.offset, 0, state.line, state.column};
-        return token{token_type::block_comment, s};
+          state.token_span = {state.offset, 0, state.line, state.column};
+          return token{token_type::block_comment, s};
+        }
+
+        continue;
       }
 
       advance(cur);
+      state.comment_delim = false;
     }
 
     if (state.finalizing) {
       auto s = state.token_span;
       s.size = state.offset - s.offset;
       state.mode = lexer_mode::standard;
+      state.comment_delim = false;
 
       state.token_span = {state.offset, 0, state.line, state.column};
       return token{token_type::block_comment, s};

@@ -81,6 +81,65 @@ TEST_CASE("lexer: comments do not appear in the data") {
   CHECK(t[1] == token_type::identifier);
 }
 
+TEST_CASE("lexer: nested block comments close only at the matching */") {
+  tavl::parser p;
+  // The inner */ must not end the comment; only the final */ does. Everything between the
+  // outermost /* and its match is a single comment, and "still outer" is not lexed as data.
+  const auto evs = tavl_test::poll_all(p, "[a /* outer /* inner */ still outer */ b]");
+
+  REQUIRE_FALSE(tavl_test::has_critical(evs));
+  CHECK(tavl_test::count_event(evs, event_type::got_comment) == 1);
+  const auto t = tavl_test::got_token_types(evs);
+  REQUIRE(t.size() == 2);
+  CHECK(t[0] == token_type::identifier);
+  CHECK(t[1] == token_type::identifier);
+
+  // The single comment spans the whole nested region.
+  for (const auto& e : evs) {
+    if (e.event.type == event_type::got_comment)
+      CHECK(p.content(e.event.token.span) == "/* outer /* inner */ still outer */");
+  }
+}
+
+TEST_CASE("lexer: deeply nested block comments balance correctly") {
+  tavl::parser p;
+  const auto evs = tavl_test::poll_all(p, "[a /* 1 /* 2 /* 3 */ 2 */ 1 */ b /* x */ c]");
+
+  REQUIRE_FALSE(tavl_test::has_critical(evs));
+  CHECK(tavl_test::count_event(evs, event_type::got_comment) == 2);
+  const auto t = tavl_test::got_token_types(evs);
+  REQUIRE(t.size() == 3);
+  CHECK(t[0] == token_type::identifier);
+  CHECK(t[1] == token_type::identifier);
+  CHECK(t[2] == token_type::identifier);
+}
+
+TEST_CASE("lexer: byte-by-byte streaming handles nested block comments") {
+  const std::string_view src = "[a /* outer /* inner */ still outer */ b]";
+
+  tavl::parser stream;
+  stream.clear();
+  std::vector<token_type> tokens;
+  size_t comments = 0;
+  size_t i = 0;
+  bool finished = false;
+  while (true) {
+    auto [ev, err] = stream.poll_event();
+    if (ev.type == event_type::got_token) tokens.push_back(ev.token.type);
+    if (ev.type == event_type::got_comment) comments += 1;
+    if (ev.type == event_type::eof) break;
+    if (ev.type == event_type::not_enought_data) {
+      if (i < src.size()) { stream.flush(src.substr(i, 1)); i += 1; }
+      else if (!finished) { stream.finish(); finished = true; }
+    }
+  }
+
+  REQUIRE(tokens.size() == 2);
+  CHECK(tokens[0] == token_type::identifier);
+  CHECK(tokens[1] == token_type::identifier);
+  CHECK(comments == 1);
+}
+
 TEST_CASE("lexer: values are converted via parser::to_*") {
   tavl::parser p;
   // Collect tokens from an array and verify conversions.

@@ -28,7 +28,8 @@ The whole file is an implicit tuple. A block's mode can be overridden (see
 floats (incl. `nan`/`inf`, `e` exponent, leading `.`), single-quoted strings `'...'` (multiline,
 minimal escaping), double-quoted strings `"..."` (standard escapes + `\u`/`\U` unicode, multiline),
 ISO `datetime` (`T` or `_` between date and time, optional fraction and timezone), identifiers
-(`[A-Za-z_][A-Za-z0-9_.]*`), registered operators, and line `//` / block `/* */` comments.
+(`[A-Za-z_][A-Za-z0-9_.]*`), registered operators, and line `//` / block `/* */` comments
+(block comments nest).
 
 See [`tests/format/`](tests/format) for commented, runnable examples of the format. Those files are
 part of the test suite, so the documented syntax is continuously parsed by `tavl_tests`.
