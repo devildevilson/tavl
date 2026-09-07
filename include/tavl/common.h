@@ -91,6 +91,7 @@
   X(err_duplicate_field) \
   X(err_too_many_values) \
   X(err_string_too_long) \
+  X(err_expect_scalar) \
 
 namespace tavl {
 

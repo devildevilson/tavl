@@ -20,6 +20,7 @@ set(TAVL_TEST_SRC
   features/test_chrono.cpp
 
   errors/test_errors.cpp
+  errors/test_audit_regressions.cpp
 
   extensions/test_pair_ast.cpp
   extensions/test_tag_ast.cpp

@@ -82,7 +82,7 @@ struct parser {
   event peek();             // non-consuming lookahead
 
   // --- releasing consumed input for streaming ---
-  // Lower bound of still-needed bytes: current lexer token start and the oldest queued event.
+  // Lower bound of still-needed bytes: lexer token, queued events, and delayed row id/operator.
   // Does not account for deserialize-level lookahead; call tavl::release_consumed(p, ctx) there.
   size_t consumed_offset() const;
   void release_before(size_t offset);   // after release, content() for discarded spans is empty

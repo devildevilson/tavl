@@ -1,6 +1,8 @@
 #include "tavl/parser.h"
 #include "tavl/detail.h"
 
+#include <limits>
+
 namespace tavl {
 
 using namespace tavl::detail;
@@ -103,6 +105,13 @@ size_t parser::consumed_offset() const {
   for (const auto& pe : events) {
     const size_t o = pe.event.token.span.offset;
     if (o != SIZE_MAX && o < b) b = o;
+  }
+  // The current row can retain its identifier/operator until a value or row end arrives.
+  // Ancestor rows have already emitted these tokens when their child block was opened.
+  if (!stack.empty() && !stack.back().has_value()) {
+    const auto& f = stack.back();
+    if (f.identifier.exists()) b = std::min(b, f.identifier.span.offset);
+    if (f.op.exists()) b = std::min(b, f.op.span.offset);
   }
   return b;
 }
@@ -418,6 +427,7 @@ std::string parser::to_string(const token& t) const {
   if (!t.exists()) return std::string();
 
   auto cont = content(t.span);
+  if (cont.empty()) return {};
   if (t.type != token_type::doublequote_string && t.type != token_type::singlequote_string) {
     return std::string(cont);
   }
@@ -427,7 +437,7 @@ std::string parser::to_string(const token& t) const {
 
   if (t.type == token_type::singlequote_string) {
     cont.remove_prefix(1);
-    if (cont.back() == '\'') cont.remove_suffix(1);
+    if (!cont.empty() && cont.back() == '\'') cont.remove_suffix(1);
 
     unescape_singlequote_string(cont, str);
     return str;
@@ -435,7 +445,7 @@ std::string parser::to_string(const token& t) const {
 
   // doublequote_string: standard escapes plus \u/\U Unicode.
   cont.remove_prefix(1);
-  if (cont.back() == '\"') cont.remove_suffix(1);
+  if (!cont.empty() && cont.back() == '\"') cont.remove_suffix(1);
 
   unescape_doublequote_string(cont, str);
 
@@ -447,9 +457,9 @@ std::optional<bool> parser::to_boolean(const token& t) const {
 
   auto cont = content(t.span);
 
-  bool b;
-  is_boolean(cont, b);
-  return std::make_optional(b);
+  bool b = false;
+  if (is_boolean(cont, b)) return b;
+  return std::nullopt;
 }
 
 std::optional<int64_t> parser::to_int(const token& t) const {
@@ -458,32 +468,32 @@ std::optional<int64_t> parser::to_int(const token& t) const {
   auto cont = content(t.span);
 
   if (t.type == token_type::number_uint) {
-    uint64_t v;
-    if (is_bin_number(cont, v)) return std::make_optional(int64_t(v));
-    if (is_oct_number(cont, v)) return std::make_optional(int64_t(v));
-    if (is_hex_number(cont, v)) return std::make_optional(int64_t(v));
+    const auto v = to_uint(t);
+    if (v && *v <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+      return static_cast<int64_t>(*v);
+    return std::nullopt;
   }
 
-  int64_t v2;
-  is_dec_number(cont, v2);
-  return std::make_optional(v2);
+  int64_t v2 = 0;
+  if (is_dec_number(cont, v2)) return v2;
+  return std::nullopt;
 }
 
 std::optional<uint64_t> parser::to_uint(const token& t) const {
   if (t.type != token_type::number_int && t.type != token_type::number_uint) return std::nullopt;
   auto cont = content(t.span);
-  if (cont[0] == '-') return std::nullopt;
+  if (cont.empty() || cont[0] == '-') return std::nullopt;
 
   if (t.type == token_type::number_uint) {
-    uint64_t v;
+    uint64_t v = 0;
     if (is_bin_number(cont, v)) return std::make_optional(v);
     if (is_oct_number(cont, v)) return std::make_optional(v);
     if (is_hex_number(cont, v)) return std::make_optional(v);
   }
 
-  int64_t v2;
-  is_dec_number(cont, v2);
-  return std::make_optional(v2);
+  uint64_t v2 = 0;
+  if (is_dec_unsigned_number(cont, v2)) return v2;
+  return std::nullopt;
 }
 
 std::optional<double> parser::to_float(const token& t) const {
@@ -492,21 +502,18 @@ std::optional<double> parser::to_float(const token& t) const {
   auto cont = content(t.span);
 
   if (t.type == token_type::number_int) {
-    int64_t v2;
-    is_dec_number(cont, v2);
-    return std::make_optional(double(v2));
+    if (const auto v = to_int(t)) return static_cast<double>(*v);
+    return std::nullopt;
   }
 
   if (t.type == token_type::number_uint) {
-    uint64_t v;
-    if (is_bin_number(cont, v)) return std::make_optional(double(v));
-    if (is_oct_number(cont, v)) return std::make_optional(double(v));
-    if (is_hex_number(cont, v)) return std::make_optional(double(v));
+    if (const auto v = to_uint(t)) return static_cast<double>(*v);
+    return std::nullopt;
   }
 
-  double v;
-  is_float_number(cont, v);
-  return std::make_optional(v);
+  double v = 0;
+  if (is_float_number(cont, v)) return v;
+  return std::nullopt;
 }
 
 std::optional<iso_datetime> parser::to_datetime(const token& t) const {
@@ -514,8 +521,8 @@ std::optional<iso_datetime> parser::to_datetime(const token& t) const {
 
   auto cont = content(t.span);
   iso_datetime dt;
-  is_datetime(cont, dt);
-  return std::make_optional(dt);
+  if (is_datetime(cont, dt)) return dt;
+  return std::nullopt;
 }
 
 }

@@ -15,7 +15,11 @@
 // so the lexer, the parser, and external code can all use them.
 namespace tavl::detail {
 
-inline constexpr std::string_view operator_chars = "!@#$%^&*-+=<>/?|~";
+// ':' is allowed here so a consumer can register it as an operator: 'name : type' reads better than
+// a '(name, type)' tuple in a schema-like document, and without the registration 'name:type' would
+// not be split at all. Datetime keeps its priority in make_token (it contains ':' too), so a
+// registered ':' cannot break '2026-09-02T20:00:00'.
+inline constexpr std::string_view operator_chars = "!@#$%^&*-+=<>/?|~:";
 inline constexpr std::string_view identificator_start_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
 inline constexpr std::string_view identificator_every_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_.0123456789";
 inline constexpr std::string_view binary_chars = "01";
@@ -53,6 +57,7 @@ bool is_bin_number(const std::string_view& str, uint64_t& out);
 bool is_oct_number(const std::string_view& str, uint64_t& out);
 bool is_hex_number(const std::string_view& str, uint64_t& out);
 bool is_dec_number(const std::string_view& str, int64_t& out);
+bool is_dec_unsigned_number(const std::string_view& str, uint64_t& out);
 bool is_float_number(const std::string_view& str, double& val);
 
 bool parse_int(std::string_view& s, int32_t& out, const size_t n);

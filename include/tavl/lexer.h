@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <string>
 #include <vector>
 #include <optional>
 
@@ -52,11 +53,12 @@ struct lexer_state {
 
 class lexer {
 public:
-  struct op_entry { std::string_view op; struct op_info info; };
+  struct op_entry { std::string op; struct op_info info; };
 
   token lex(const char_storage& storage);
   void finish();
 
+  // Registration copies the spelling; callers need not retain its storage.
   void add_operator(const std::string_view& op, op_info info);
   void add_litteral_operator(const std::string_view& op, op_info info);
   void clear_operators();

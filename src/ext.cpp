@@ -178,6 +178,11 @@ static event ast_collect_row(parser& p, ast_context& ctx, bool detect_misplaced 
   event ev; error err;
   std::tie(ev, err) = p.poll_event();
   while (true) {
+    if (!err.no_error()) {
+      if (ctx.parse_error.no_error() || (err.is_critical() && !ctx.parse_error.is_critical()))
+        ctx.parse_error = err;
+      if (err.is_critical()) ctx.had_error = true;
+    }
     if (ev.type == event_type::not_enought_data) return ev;
 
     if ((ev.type == event_type::row_end && ctx.nest_counter == 0) || ev.type == event_type::eof) {
@@ -199,7 +204,9 @@ static event ast_collect_row(parser& p, ast_context& ctx, bool detect_misplaced 
       if (ev.type == event_type::tuple_begin || ev.type == event_type::object_begin ||
           ev.type == event_type::array_begin) ctx.nest_counter += 1;
       else if (ev.type == event_type::tuple_end || ev.type == event_type::object_end ||
-               ev.type == event_type::array_end) ctx.nest_counter -= 1;
+               ev.type == event_type::array_end) {
+        if (ctx.nest_counter != 0) ctx.nest_counter -= 1;
+      }
       std::tie(ev, err) = p.poll_event();
       continue;
     }
@@ -266,12 +273,14 @@ static void ast_reset_row(ast_context& ctx) {
   ctx.had_error = false;
   ctx.row_too_long = false;
   ctx.output_full = false;
+  ctx.parse_error = error{};
   // Keep bounded_output; it is a caller option across rows.
 }
 
 // Row error spanning the whole row. err_row_too_long for token-limit overflow, otherwise misplaced
 // or dangling operator.
 static error ast_row_error(const ast_context& ctx, const event& end_ev) {
+  if (ctx.parse_error.is_critical()) return ctx.parse_error;
   const size_t s = ctx.row_start.offset;
   const size_t e = end_ev.token.span.offset;
   const error_type t = ctx.row_too_long ? error_type::err_row_too_long : error_type::err_misplaced_operator;
@@ -284,7 +293,7 @@ std::tuple<event, error> make_pair_ast(parser& p, ast_context& ctx, std::vector<
   const event ev = ast_collect_row(p, ctx);
   if (ev.type == event_type::not_enought_data) return {ev, error{}};
 
-  std::tuple<event, error> result{ev, error{}};
+  std::tuple<event, error> result{ev, ctx.parse_error};
   if (ctx.had_error) {
     result = {ev, ast_row_error(ctx, ev)};
     ctx.op_stack.clear();
@@ -399,7 +408,7 @@ std::tuple<event, error> make_tag_ast(parser& p, ast_context& ctx, std::vector<n
   const event ev = ast_collect_row(p, ctx);
   if (ev.type == event_type::not_enought_data) return {ev, error{}};
 
-  std::tuple<event, error> result{ev, error{}};
+  std::tuple<event, error> result{ev, ctx.parse_error};
   if (ctx.had_error) {
     result = {ev, ast_row_error(ctx, ev)};
     ctx.op_stack.clear();
@@ -546,7 +555,7 @@ std::tuple<event, error> make_math_ast(parser& p, ast_context& ctx, std::vector<
 
   if (ev.type == event_type::not_enought_data) return {ev, error{}};
 
-  std::tuple<event, error> result{ev, error{}};
+  std::tuple<event, error> result{ev, ctx.parse_error};
   if (ctx.had_error) {
     result = {ev, ast_row_error(ctx, ev)};
     ctx.op_stack.clear();

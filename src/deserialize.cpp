@@ -46,6 +46,43 @@ event_type ds_block_end(event_type begin) {
   }
 }
 
+event ds_peek_scalar(parser& p, ct_context& ctx, error_type expected) {
+  size_t fi;
+  if (ctx.cursor < ctx.frames.size()) {
+    fi = ctx.cursor++;
+  } else {
+    event ev = ct_peek(p, ctx);
+    if (ctx.stalled) return ev;
+    while (ev.type == event_type::got_row_operator || ev.type == event_type::got_comment ||
+           ev.type == event_type::row_begin) {
+      ct_next(p, ctx);
+      ev = ct_peek(p, ctx);
+      if (ctx.stalled) return ev;
+    }
+    if (!ds_is_block_begin(ev.type)) return ev;
+
+    ctx.push_diagnostic(error{expected, ev.token.span});
+    fi = ctx.frames.size();
+    ctx.frames.push_back(ct_context::frame{});
+    ctx.cursor = ctx.frames.size();
+    ctx.frames[fi].skip_depth = 1;
+    ct_next(p, ctx);
+  }
+
+  auto& fr = ctx.frames[fi];
+  while (fr.skip_depth != 0) {
+    const event ev = ct_peek(p, ctx);
+    if (ctx.stalled) return ev;
+    if (ev.type == event_type::eof) break;
+    if (ds_is_block_begin(ev.type)) ++fr.skip_depth;
+    else if (ds_is_block_end(ev.type)) --fr.skip_depth;
+    ct_next(p, ctx);
+  }
+  ctx.frames.pop_back();
+  ctx.cursor = ctx.frames.size();
+  return {}; // This slot is finished; the following value belongs to its parent.
+}
+
 // Skip a row operator and detect the current value boundary. Blocks return their matching *_end
 // after consuming the opener; bare token sequences stop at row_end; otherwise use default_term.
 static event_type ds_detect_term(parser& p, ct_context& ctx, event_type default_term) {

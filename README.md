@@ -31,6 +31,17 @@ ISO `datetime` (`T` or `_` between date and time, optional fraction and timezone
 (`[A-Za-z_][A-Za-z0-9_.]*`), registered operators, and line `//` / block `/* */` comments
 (block comments nest).
 
+A symbolic operator is built from `operator_chars` (`!@#$%^&*-+=<>/?|~:`) and is registered by the
+consumer, so the same text lexes differently depending on what is registered: with `:` registered
+`position:v3` becomes three tokens; without it the whole thing is one `unrecognized` token. `datetime` keeps
+priority over the operator split, so a registered `-` or `:` cannot break `2026-06-14T12:30:00`.
+
+Datetime fields require decimal digits, but calendar ranges are intentionally not validated:
+`2026-99-99` preserves those values in `iso_datetime`, while `2026-0x-01` is not a datetime.
+Fractions of a second are padded or truncated to milliseconds (`.1` → 100 ms, `.123456` → 123 ms).
+Operator registration copies the spelling, so temporary strings and later changes to the original
+string do not affect the parser.
+
 See [`tests/format/`](tests/format) for commented, runnable examples of the format. Those files are
 part of the test suite, so the documented syntax is continuously parsed by `tavl_tests`.
 

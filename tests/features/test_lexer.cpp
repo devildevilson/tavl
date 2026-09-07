@@ -71,6 +71,40 @@ TEST_CASE("lexer: datetime takes precedence over the '-' operator") {
   CHECK(t[0] == token_type::datetime);
 }
 
+TEST_CASE("lexer: a registered ':' splits an unspaced pair") {
+  tavl::parser p;
+  // ':' is part of operator_chars so a schema-like document can spell a row as 'name : type'
+  // instead of a '(name, type)' tuple. Without the registration the same text is unrecognized,
+  // which is why registering it has to be possible at all.
+  p.add_default_operator();
+  p.add_operator(":", tavl::op_fixity::binary, 2);
+
+  const auto evs = tavl_test::poll_all(p, "[position:v3, height : f1]");
+  REQUIRE_FALSE(tavl_test::has_critical(evs));
+  const auto t = tavl_test::got_token_types(evs);
+  REQUIRE(t.size() == 6);
+  CHECK(t[0] == token_type::identifier);
+  CHECK(t[1] == token_type::op);                // split out of 'position:v3'
+  CHECK(t[2] == token_type::identifier);
+  CHECK(t[3] == token_type::identifier);
+  CHECK(t[4] == token_type::op);                // already standalone
+  CHECK(t[5] == token_type::identifier);
+}
+
+TEST_CASE("lexer: datetime takes precedence over a registered ':'") {
+  tavl::parser p;
+  // The interaction that makes ':' safe to register: a datetime contains two of them, and it is
+  // recognized before the operator split, so the timestamp must stay a single token.
+  p.add_default_operator();
+  p.add_operator(":", tavl::op_fixity::binary, 2);
+
+  const auto evs = tavl_test::poll_all(p, "[2026-06-14T12:30:00]");
+  REQUIRE_FALSE(tavl_test::has_critical(evs));
+  const auto t = tavl_test::got_token_types(evs);
+  REQUIRE(t.size() == 1);
+  CHECK(t[0] == token_type::datetime);
+}
+
 TEST_CASE("lexer: comments do not appear in the data") {
   tavl::parser p;
   const auto evs = tavl_test::poll_all(p, "[a /* block */ b] // line\n");

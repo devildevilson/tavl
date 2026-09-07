@@ -8,15 +8,12 @@ namespace tavl {
 using namespace tavl::detail;
 
 std::string_view char_storage::resolve(const span& s) const {
-  const size_t final_offset = s.offset < offset ? 0 : s.offset - offset;
+  if (s.offset < offset) return {};
+  const size_t final_offset = s.offset - offset;
   if (final_offset >= storage.size()) return std::string_view();
   if (s.size == 0) return std::string_view();
 
-  if (final_offset + s.size >= storage.size()) {
-    return std::string_view(storage.data() + final_offset, storage.data() + storage.size());
-  }
-
-  return std::string_view(storage.data() + final_offset, storage.data() + (final_offset + s.size));
+  return std::string_view(storage.data() + final_offset, std::min(s.size, storage.size() - final_offset));
 }
 
 char char_storage::peek(const size_t offset) const {
@@ -40,7 +37,7 @@ void char_storage::release_before(const size_t offset) {
   const size_t final_offset = std::min(offset - this->offset, storage.size());
 
   storage.erase(storage.begin(), storage.begin() + final_offset);
-  this->offset = offset;
+  this->offset += final_offset;
 }
 
 void char_storage::clear() {
@@ -58,20 +55,13 @@ token lexer::lex(const char_storage& storage) {
 
   if (state.mode == lexer_mode::standard) {
     while (state.offset < storage.size()) {
-      const char prev = storage.peek(state.offset-1);
+      const char prev = state.offset > state.token_span.offset ? storage.peek(state.offset-1) : '\0';
       const char cur = storage.peek(state.offset);
-      if (prev == '/' && cur == '/' && state.offset-1 > state.token_span.offset) {
-        auto t = make_token(storage);
-        if (!t.valid()) {
-          state.mode = lexer_mode::identifier;
-          break;
-        }
-
-        state.token_span = {state.offset, 0, state.line, state.column};
-        return t;
-      }
-
-      if (prev == '/' && cur == '*' && state.offset-1 > state.token_span.offset) {
+      if (prev == '/' && (cur == '/' || cur == '*') && state.offset-1 > state.token_span.offset) {
+        // The first slash belongs to the comment, not to the preceding token. Leave it
+        // unread so the next lex call can recognize the complete delimiter, even after release.
+        state.offset -= 1;
+        state.column -= 1;
         auto t = make_token(storage);
         if (!t.valid()) {
           state.mode = lexer_mode::identifier;
@@ -224,7 +214,7 @@ token lexer::lex(const char_storage& storage) {
     char c = storage.peek(state.offset);
     while (state.offset < storage.size()) {
       string_end = !state.escaped && c == '"';
-      state.escaped = c == '\\';
+      state.escaped = !state.escaped && c == '\\';
 
       if (string_end) {
         state.escaped = false;
@@ -257,7 +247,7 @@ token lexer::lex(const char_storage& storage) {
     char c = storage.peek(state.offset);
     while (state.offset < storage.size()) {
       string_end = !state.escaped && c == '\'';
-      state.escaped = c == '\\';
+      state.escaped = !state.escaped && c == '\\';
 
       if (string_end) {
         state.escaped = false;
@@ -361,6 +351,16 @@ token lexer::lex(const char_storage& storage) {
   }
 
   if (state.mode == lexer_mode::identifier) {
+    // After splitting a leading operator, the remaining span can be a complete datetime.
+    // Classify it again before scanning its internal '-' and ':' characters as operators.
+    const auto remaining = storage.resolve({state.token_span.offset, state.offset - state.token_span.offset});
+    if (iso_datetime dt; is_datetime(remaining, dt)) {
+      auto s = state.token_span;
+      s.size = remaining.size();
+      state.token_span = {state.offset, 0, state.line, state.column};
+      state.mode = lexer_mode::standard;
+      return token{token_type::datetime, s};
+    }
     size_t line = state.token_span.line;
     size_t column = state.token_span.column;
     const auto advance = [this, &line, &column] (const char c) {
@@ -434,26 +434,26 @@ void lexer::finish() {
 
 void lexer::add_operator(const std::string_view& op, op_info info) {
   // Configuration input: invalid operators are programmer errors, not parse errors.
-  TAVL_CHECK(check_valid_string_chars(op, operator_chars), "operator must consist of operator_chars");
+  TAVL_CHECK(!op.empty() && check_valid_string_chars(op, operator_chars), "operator must be nonempty and consist of operator_chars");
 
-  const op_entry entry{op, info};
+  op_entry entry{std::string(op), info};
   auto itr = std::upper_bound(operators.begin(), operators.end(), entry, [] (const op_entry& a, const op_entry& b) {
     return a.op.size() > b.op.size();   // longest-match: longer operators first
   });
 
-  operators.insert(itr, entry);
+  operators.insert(itr, std::move(entry));
 }
 
 void lexer::add_litteral_operator(const std::string_view& op, op_info info) {
   // Literal operators live in identifier space, so invalid ones are programmer errors.
   TAVL_CHECK(is_valid_identificator(op), "litteral operator must be a valid identificator");
 
-  const op_entry entry{op, info};
+  op_entry entry{std::string(op), info};
   auto itr = std::upper_bound(litteral_operators.begin(), litteral_operators.end(), entry, [] (const op_entry& a, const op_entry& b) {
     return a.op.size() > b.op.size();
   });
 
-  litteral_operators.insert(itr, entry);
+  litteral_operators.insert(itr, std::move(entry));
 }
 
 std::optional<op_info> lexer::operator_info(const std::string_view& op, op_fixity fixity) const {
@@ -550,6 +550,10 @@ token lexer::make_token(const char_storage& storage, size_t local_offset) {
 
   if (int64_t v = 0; is_dec_number(str, v)) {
     return token{token_type::number_int, s};
+  }
+
+  if (uint64_t v = 0; is_dec_unsigned_number(str, v)) {
+    return token{token_type::number_uint, s};
   }
 
   if (double v = 0; is_float_number(str, v)) {

@@ -60,6 +60,32 @@ TEST_CASE("deserialize: containers (vector/array/pair/tuple)") {
   CHECK(std::get<2>(v.t) == true);
 }
 
+TEST_CASE("deserialize: a list of pairs reads both '(a, b)' and 'a : b' rows") {
+  tavl::parser p;
+  p.add_default_operator();
+  p.add_operator(":", tavl::op_fixity::binary, 2);
+
+  // The point of registering ':': a schema document can drop the tuple parens. Reading is
+  // unchanged, because a row with an operator is the same PAIR as a row in parens — the pair
+  // reader skips operator tokens between slots. Both spellings therefore stay valid, which is what
+  // makes the format migratable one file at a time.
+  struct schema {
+    std::vector<std::pair<std::string, std::string>> tuples;
+    std::vector<std::pair<std::string, std::string>> operators;
+    std::vector<std::pair<std::string, std::string>> unspaced;
+  };
+
+  const auto v = tavl_test::deserialize_all<schema>(p,
+      "tuples = [ (position, v3), (height, f1) ]\n"
+      "operators = [ position : v3, height : f1 ]\n"
+      "unspaced = [ position:v3, height:f1 ]");
+
+  const std::vector<std::pair<std::string, std::string>> expected{{"position", "v3"}, {"height", "f1"}};
+  CHECK(v.tuples == expected);
+  CHECK(v.operators == expected);
+  CHECK(v.unspaced == expected);
+}
+
 TEST_CASE("deserialize: pair/tuple — inline, block and [] wrapper") {
   tavl::parser p;
   p.add_default_operator();

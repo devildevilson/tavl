@@ -114,15 +114,30 @@ bool is_hex_number(const std::string_view &str, uint64_t& out) {
 
 bool is_dec_number(const std::string_view &str, int64_t& out) {
   auto tmp = str;
-  int64_t sign = 1;
-  if (tmp[0] == '-' || tmp[0] == '+') {
-    if (tmp[0] == '-') sign = -1;
-    tmp = tmp.substr(1);
+  if (tmp.empty()) return false;
+  if (tmp.front() == '+') {
+    tmp.remove_prefix(1);
+    if (tmp.empty() || tmp.front() == '-' || tmp.front() == '+') return false;
   }
 
-  const auto [ptr, ec] = std::from_chars(tmp.data(), tmp.data() + tmp.size(), out);
-  out = sign * out;
-  return ec == std::errc() && ptr == (tmp.data() + tmp.size());
+  // Keep '-' for from_chars so INT64_MIN never needs a positive int64_t magnitude.
+  int64_t value = 0;
+  const auto [ptr, ec] = std::from_chars(tmp.data(), tmp.data() + tmp.size(), value);
+  if (ec != std::errc() || ptr != tmp.data() + tmp.size()) return false;
+  out = value;
+  return true;
+}
+
+bool is_dec_unsigned_number(const std::string_view &str, uint64_t& out) {
+  auto tmp = str;
+  if (tmp.empty()) return false;
+  if (tmp.front() == '+') tmp.remove_prefix(1);
+  if (tmp.empty()) return false;
+  uint64_t value = 0;
+  const auto [ptr, ec] = std::from_chars(tmp.data(), tmp.data() + tmp.size(), value);
+  if (ec != std::errc() || ptr != tmp.data() + tmp.size()) return false;
+  out = value;
+  return true;
 }
 
 static constexpr size_t helper_buffer_size = 1024;
@@ -137,7 +152,7 @@ bool is_float_number(const std::string_view &str, double &val) {
     tmp.remove_prefix(1);
   }
 
-  if (tmp.empty()) return false;
+  if (tmp.empty() || tmp.front() == '+' || tmp.front() == '-') return false;
 
   if (tmp == "nan" || tmp == "NAN" || tmp == "NaN") {
     val = sign * std::numeric_limits<double>::quiet_NaN();
@@ -177,15 +192,18 @@ bool is_float_number(const std::string_view &str, double &val) {
 }
 
 bool parse_int(std::string_view& s, int32_t& out, const size_t n) {
-  if (s.size() < n) return false;
+  if (n == 0 || s.size() < n) return false;
+  for (const char c : s.substr(0, n)) if (c < '0' || c > '9') return false;
   auto [ptr, ec] = std::from_chars(s.data(), s.data() + n, out);
-  if (ec != std::errc{}) return false;
+  if (ec != std::errc{} || ptr != s.data() + n) return false;
   s.remove_prefix(n);
   return true;
 }
 
 bool is_datetime(const std::string_view &str, iso_datetime& data) {
   if (str.empty()) return false;
+
+  data = iso_datetime{};
 
   auto tmp = str;
 
@@ -223,9 +241,11 @@ bool is_datetime(const std::string_view &str, iso_datetime& data) {
   if (!tmp.empty() && tmp[0] == '.') {
     tmp.remove_prefix(1);
     size_t i = 0;
-    while (i < tmp.size() && std::isdigit(tmp[i])) i++;
+    while (i < tmp.size() && tmp[i] >= '0' && tmp[i] <= '9') i++;
     if (i == 0) return false;
-    std::from_chars(tmp.data(), tmp.data() + i, data.ms);
+    // Decimal fractions of a second: pad short fractions and truncate sub-millisecond digits.
+    for (size_t j = 0; j < 3; ++j)
+      data.ms = data.ms * 10 + (j < i ? tmp[j] - '0' : 0);
     tmp.remove_prefix(i);
   }
 
@@ -241,8 +261,10 @@ bool is_datetime(const std::string_view &str, iso_datetime& data) {
     tmp.remove_prefix(1);
     int tz_h = 0, tz_m = 0;
     if (!parse_int(tmp, tz_h, 2)) return false;
-    if (!tmp.empty() && tmp[0] == ':') tmp.remove_prefix(1);
-    if (!tmp.empty() && std::isdigit(tmp[0])) parse_int(tmp, tz_m, 2);
+    if (!tmp.empty()) {
+      if (tmp[0] == ':') tmp.remove_prefix(1);
+      if (!parse_int(tmp, tz_m, 2)) return false;
+    }
     data.tz_offset_mm = sign * (tz_h * 60 + tz_m);
   }
 

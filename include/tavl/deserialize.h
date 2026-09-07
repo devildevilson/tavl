@@ -88,6 +88,10 @@ template <typename T> void deserialize(parser& p, ct_context& ctx, T& val);   //
 event ct_peek(parser& p, ct_context& ctx);
 event ct_next(parser& p, ct_context& ctx);
 
+// Scalar lookahead skips row operators/comments. A block in a scalar slot is diagnosed and
+// skipped as one value, using a recovery frame so a chunk boundary cannot lose skip progress.
+event ds_peek_scalar(parser& p, ct_context& ctx, error_type expected);
+
 bool ds_is_block_begin(event_type t);
 bool ds_is_block_end(event_type t);
 event_type ds_block_end(event_type begin);
@@ -109,6 +113,10 @@ void ds_finish_group(parser& p, ct_context& ctx, event_type term);
 // Read one pair/tuple slot: skip row delimiters and operator separators, then read the value.
 template <typename E>
 void ds_read_slot(parser& p, ct_context& ctx, event_type term, E& slot) {
+  if (ctx.cursor < ctx.frames.size()) {
+    deserialize(p, ctx, slot);
+    return;
+  }
   while (true) {
     const event ev = ct_peek(p, ctx);
     if (ctx.stalled) return;
@@ -130,8 +138,8 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
   ct_scope _scope(ctx);
 
   if constexpr (std::is_same_v<T, bool>) {
-    event ev = ct_peek(p, ctx); if (ctx.stalled) return;
-    if (ev.type == event_type::got_row_operator) { ct_next(p, ctx); ev = ct_peek(p, ctx); if (ctx.stalled) return; }
+    const event ev = ds_peek_scalar(p, ctx, error_type::err_expect_token_boolean);
+    if (ctx.stalled) return;
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       if (const auto v = p.to_boolean(ev.token)) val = *v;
@@ -139,8 +147,8 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     }
   }
   else if constexpr (std::is_integral_v<T>) {
-    event ev = ct_peek(p, ctx); if (ctx.stalled) return;
-    if (ev.type == event_type::got_row_operator) { ct_next(p, ctx); ev = ct_peek(p, ctx); if (ctx.stalled) return; }
+    const event ev = ds_peek_scalar(p, ctx, std::is_signed_v<T> ? error_type::err_expect_token_number_int : error_type::err_expect_token_number_uint);
+    if (ctx.stalled) return;
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       if constexpr (std::is_signed_v<T>) {
@@ -153,8 +161,8 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     }
   }
   else if constexpr (std::is_floating_point_v<T>) {
-    event ev = ct_peek(p, ctx); if (ctx.stalled) return;
-    if (ev.type == event_type::got_row_operator) { ct_next(p, ctx); ev = ct_peek(p, ctx); if (ctx.stalled) return; }
+    const event ev = ds_peek_scalar(p, ctx, error_type::err_expect_token_number_float);
+    if (ctx.stalled) return;
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       if (const auto v = p.to_float(ev.token)) val = static_cast<T>(*v);
@@ -164,8 +172,8 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
   else if constexpr (ds_is_time_point<T>::value || ds_is_duration<T>::value) {
     // datetime token -> Unix milliseconds (UTC). time_point is built from epoch duration; duration
     // receives the raw epoch-millisecond value without calendar semantics.
-    event ev = ct_peek(p, ctx); if (ctx.stalled) return;
-    if (ev.type == event_type::got_row_operator) { ct_next(p, ctx); ev = ct_peek(p, ctx); if (ctx.stalled) return; }
+    const event ev = ds_peek_scalar(p, ctx, error_type::err_expect_scalar);
+    if (ctx.stalled) return;
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       if (const auto dt = p.to_datetime(ev.token)) {
@@ -176,16 +184,16 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     }
   }
   else if constexpr (std::is_same_v<T, std::string>) {
-    event ev = ct_peek(p, ctx); if (ctx.stalled) return;
-    if (ev.type == event_type::got_row_operator) { ct_next(p, ctx); ev = ct_peek(p, ctx); if (ctx.stalled) return; }
+    const event ev = ds_peek_scalar(p, ctx, error_type::err_expect_scalar);
+    if (ctx.stalled) return;
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       val = p.to_string(ev.token);
     }
   }
   else if constexpr (ds_is_char_array<T>::value) {         // std::array<char,N> / char[N] string buffer
-    event ev = ct_peek(p, ctx); if (ctx.stalled) return;
-    if (ev.type == event_type::got_row_operator) { ct_next(p, ctx); ev = ct_peek(p, ctx); if (ctx.stalled) return; }
+    const event ev = ds_peek_scalar(p, ctx, error_type::err_expect_scalar);
+    if (ctx.stalled) return;
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       ctx.strbuf = p.to_string(ev.token);                  // context buffer avoids local containers

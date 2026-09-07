@@ -36,6 +36,7 @@ struct ast_context {
   bool bounded_output = false;   // capacity-aware mode set by the caller
   bool output_full = false;      // row did not fit into ast_nodes.capacity()
   source_span row_start{};
+  error parse_error{};          // first parser diagnostic, upgraded from warning to critical
 
   std::vector<event_args> op_stack;
   std::vector<event_args> rpn_output;
