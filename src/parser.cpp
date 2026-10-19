@@ -314,9 +314,9 @@ void parser::fill_events() {
         case token_type::close_bracket: close_block(block_type::array,  event_type::array_end,  c); break;
 
         case token_type::comma:
-          // Empty row before a comma: synthesize empty_row and warn.
+          // A comma without a preceding row is a structural error.
           if (!stack.back().has_row()) {
-            emit(event{event_type::empty_row, c}, error{error_type::warn_empty_row, c.span});
+            emit(event{event_type::empty_row, c}, error{error_type::err_empty_row, c.span});
             break;
           }
           close_row(c);

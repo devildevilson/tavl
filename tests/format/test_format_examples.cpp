@@ -64,7 +64,7 @@ TEST_CASE("format example: ordinary-profile diagnostics are stable across chunks
     {tavl::event_type::row_end, tavl::error_type::err_missing_value, 3, 17},
     {tavl::event_type::got_token, tavl::error_type::err_invalid_escape, 4, 11},
     {tavl::event_type::got_token, tavl::error_type::err_float_out_of_range, 5, 9},
-    {tavl::event_type::empty_row, tavl::error_type::warn_empty_row, 6, 13},
+    {tavl::event_type::empty_row, tavl::error_type::err_empty_row, 6, 13},
     // Duplicate fields are diagnosed by the generic CLI, not the event parser.
     {tavl::event_type::array_end, tavl::error_type::err_bracket_missmatch, 8, 1},
     {tavl::event_type::got_comment, tavl::error_type::err_unterminated_block_comment, 9, 1},

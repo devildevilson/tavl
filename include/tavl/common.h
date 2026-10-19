@@ -75,7 +75,6 @@
   /* warning */ \
   X(warn_expected_identifier) \
   X(warn_object_without_value) \
-  X(warn_empty_row) \
   X(warn_missing_field) \
   /* critical */ \
   X(err_bracket_missmatch) \
@@ -86,6 +85,7 @@
   X(err_forbidden_nul) \
   X(err_forbidden_control) \
   X(err_missing_value) \
+  X(err_empty_row) \
   X(err_expected_identifier) \
   X(err_misplaced_operator) \
   X(err_nesting_too_deep) \

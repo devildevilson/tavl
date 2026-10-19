@@ -44,11 +44,22 @@ TEST_CASE("error: extra closing bracket -> critical") {
   CHECK(tavl_test::has_error(evs, error_type::err_bracket_missmatch));
 }
 
-TEST_CASE("error: empty row before a comma -> warn_empty_row (not critical)") {
+TEST_CASE("error: a comma without a preceding row is critical") {
   tavl::parser p;
-  const auto evs = tavl_test::poll_all(p, "[1, , 2]");
-  CHECK(tavl_test::has_error(evs, error_type::warn_empty_row));
-  CHECK_FALSE(tavl_test::has_critical(evs));
+  p.add_default_operator();
+  for (std::string_view source : {"{,}", "(,)", "[,]", "{,a}", "(,a)", "[,a]",
+                                  "[1, , 2]", "{\n,a}", "{a=a\n,}", ",a"}) {
+    const auto evs = tavl_test::poll_all(p, source);
+    CHECK(tavl_test::has_error(evs, error_type::err_empty_row));
+    CHECK(tavl_test::has_critical(evs));
+  }
+  for (std::string_view source : {"{a=a,}", "(a,)", "[a,]", "{}", "()", "[]",
+                                  "{\n}", "(\n)", "[\n]", "{\n\n}", "(\n\n)", "[\n\n]",
+                                  "{a=a,\n}", "(a,\n)", "[a,\n]", "{\r\n}", "(\r\n)", "[\r\n]"}) {
+    const auto evs = tavl_test::poll_all(p, source);
+    CHECK_FALSE(tavl_test::has_error(evs, error_type::err_empty_row));
+    CHECK_FALSE(tavl_test::has_critical(evs));
+  }
 }
 
 TEST_CASE("error: object without a value -> warn_object_without_value") {

@@ -33,7 +33,8 @@ sequence. A C++ tuple field can therefore read `b = 10 20 30`,
 not three fields.
 Inside an explicit array, `[1 2]` has **one** element row containing two
 values, whereas `[1,2]` has **two** element rows. This distinction holds at
-every nesting level.
+every nesting level. A comma requires a row before it; `{,}` and `[,]` are
+errors. Trailing commas, empty blocks, and blank LF-separated lines are valid.
 
 The parser can register other operators and override block row modes for
 formats built on TAVL. Registration changes tokenization: with `:` registered,

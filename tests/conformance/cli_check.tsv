@@ -20,3 +20,18 @@ repeated_root	x=1\nx=2	0	-
 unclosed_block	a={x=1	2	err_bracket_missmatch
 unclosed_string	a="x	2	err_unterminated_string
 unclosed_comment	a=1 /*x	2	err_unterminated_block_comment
+empty_object_position	{,}	2	err_empty_row
+empty_tuple_position	(,)	2	err_empty_row
+empty_array_position	[,]	2	err_empty_row
+leading_object_comma	{,a}	2	err_empty_row
+leading_tuple_comma	(,a)	2	err_empty_row
+leading_array_comma	[,a]	2	err_empty_row
+trailing_object_comma	{a=a,}	0	-
+trailing_tuple_comma	(a,)	0	-
+trailing_array_comma	[a,]	0	-
+empty_object	{}	0	-
+empty_tuple	()	0	-
+empty_array	[]	0	-
+blank_object_line	{\n}	0	-
+blank_tuple_line	(\n)	0	-
+blank_array_line	[\n]	0	-

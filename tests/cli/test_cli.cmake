@@ -76,7 +76,7 @@ if(NOT rc EQUAL 2 OR NOT err MATCHES "warn_object_without_value" OR
    NOT err MATCHES "err_missing_value" OR
    NOT err MATCHES "err_invalid_escape" OR
    NOT err MATCHES "err_float_out_of_range" OR
-   NOT err MATCHES "warn_empty_row" OR
+   NOT err MATCHES "err_empty_row" OR
    NOT err MATCHES "err_duplicate_field" OR
    NOT err MATCHES "err_bracket_missmatch" OR
    NOT err MATCHES "err_unterminated_block_comment")

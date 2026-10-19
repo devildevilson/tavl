@@ -211,8 +211,12 @@ matrix=[[1 2],[3 4]]  // two outer rows; each inner [] has one row
 matrix=[[1,2],[3,4]]  // two outer rows; each inner [] has two rows
 ```
 
-An empty line adds no row. An empty comma-separated position produces
-`warn_empty_row`; a trailing comma is allowed. An object-like row with a
+An empty line adds no row. A comma with no preceding row at its block depth
+produces critical `err_empty_row`: `{,}`, `(,)`, `[,]`, and leading commas
+before data are invalid. A comma that ends an existing row may be followed
+directly by the closing bracket, so `{a=a,}`, `(a,)`, and `[a,]` are valid.
+Empty blocks and blocks containing only LF-separated blank lines are valid.
+An object-like row with a
 name and no data, such as `{value}`, produces `warn_object_without_value`;
 this warning does not make the document invalid. `{=}` has a different problem:
 its operator has no name. A binary row operator ending without data, such as
