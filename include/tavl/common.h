@@ -179,6 +179,7 @@ struct token {
   source_span span;
   bool terminated = true;  // false for a quoted string or block comment cut off by EOF
   bool float_out_of_range = false;  // valid decimal spelling outside the binary64 range
+  bool integer_out_of_range = false;  // valid integer spelling outside the 64-bit range
 
   inline bool exists() const noexcept { return type != token_type::invalid; }
   inline bool valid() const noexcept { return exists() && type != token_type::unrecognized && terminated; }

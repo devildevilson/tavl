@@ -45,18 +45,20 @@ add_executable(tavl_parser_allocations features/test_parser_allocations.cpp)
 target_link_libraries(tavl_parser_allocations PRIVATE tavl)
 add_test(NAME tavl_parser_allocations COMMAND tavl_parser_allocations)
 
-add_test(
-  NAME tavl_cli
-  COMMAND "${CMAKE_COMMAND}"
-    "-DCLI=$<TARGET_FILE:tavl_cli>"
-    "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/cli/test_cli.cmake"
-)
+if (TAVL_BUILD_CLI)
+  add_test(
+    NAME tavl_cli
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCLI=$<TARGET_FILE:tavl_cli>"
+      "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cli/test_cli.cmake"
+  )
 
-add_test(
-  NAME tavl_cli_conformance
-  COMMAND "${CMAKE_COMMAND}"
-    "-DCLI=$<TARGET_FILE:tavl_cli>"
-    "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/conformance/check_cli.cmake"
-)
+  add_test(
+    NAME tavl_cli_conformance
+    COMMAND "${CMAKE_COMMAND}"
+      "-DCLI=$<TARGET_FILE:tavl_cli>"
+      "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/conformance/check_cli.cmake"
+  )
+endif()

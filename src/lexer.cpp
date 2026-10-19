@@ -72,6 +72,15 @@ size_t char_storage::buffer_size() const {
   return storage.size() - begin;
 }
 
+size_t char_storage::released_offset() const noexcept {
+  return offset;
+}
+
+std::string_view char_storage::live_source() const noexcept {
+  if (storage.size() == begin) return {};
+  return {storage.data() + begin, storage.size() - begin};
+}
+
 token lexer::lex(const char_storage& storage) {
   // Read until a delimiter, then classify the accumulated span as a scalar token. If that fails,
   // switch to identifier mode and split it into registered operators and identifiers.
@@ -407,6 +416,24 @@ token lexer::lex(const char_storage& storage) {
         if (str == op.op) { found_op = op.op; break; }
       }
 
+      // A later operator can make the whole scalar invalid (1e+3+2). While finding
+      // its boundary, skip the sign that belongs to a valid exponent prefix.
+      if (found_op.size() == 1 && (c == '+' || c == '-') &&
+          state.division_counter > state.token_span.offset &&
+          (storage.peek(state.division_counter - 1) == 'e' ||
+           storage.peek(state.division_counter - 1) == 'E')) {
+        size_t end = state.division_counter + 1;
+        while (end < state.offset && storage.peek(end) >= '0' && storage.peek(end) <= '9') ++end;
+        if (end > state.division_counter + 1) {
+          const auto prefix = storage.resolve({state.token_span.offset, end - state.token_span.offset});
+          double value = 0;
+          if (parse_float(prefix, value) != float_parse_result::invalid) {
+            advance(c);
+            continue;
+          }
+        }
+      }
+
       if (!found_op.empty() && state.division_counter > state.token_span.offset) {
         auto t = make_token(storage, state.division_counter);
         // The prefix before an operator may still be malformed (for example "123abc-x"). That is
@@ -544,6 +571,18 @@ token lexer::make_token(const char_storage& storage, size_t local_offset) {
     return token{token_type::datetime, s};
   }
 
+  // An exponent sign belongs to the float, even when + or - is registered as an operator.
+  // Keep a leading sign available to the operator splitter (for example, -1e-3).
+  if (!str.empty() && str.front() >= '0' && str.front() <= '9' &&
+      str.find_first_of("eE") != std::string_view::npos) {
+    double value = 0;
+    const auto result = parse_float(str, value);
+    if (result == float_parse_result::valid)
+      return token{token_type::number_float, s};
+    if (result == float_parse_result::out_of_range)
+      return token{token_type::number_float, s, true, true};
+  }
+
   // If a token contains a registered symbolic operator, return invalid so identifier mode can split
   // it into operator + remainder. This check is intentionally above number parsing: with '-' registered,
   // '-123' becomes op + number; without it, it remains a signed number.
@@ -577,6 +616,37 @@ token lexer::make_token(const char_storage& storage, size_t local_offset) {
 
   if (uint64_t v = 0; is_dec_unsigned_number(str, v)) {
     return token{token_type::number_uint, s};
+  }
+
+  // All digits with a recognized sign/base prefix, but outside the corresponding integer range.
+  // Keep the numeric type and span so callers can report a range error and still inspect the text.
+  auto digits = str;
+  bool negative = false;
+  bool has_sign = false;
+  if (!digits.empty() && (digits.front() == '+' || digits.front() == '-')) {
+    has_sign = true;
+    negative = digits.front() == '-';
+    digits.remove_prefix(1);
+  }
+  unsigned base = 10;
+  if (!has_sign && digits.size() >= 2 && digits.front() == '0') {
+    switch (digits[1]) {
+      case 'b': case 'B': base = 2; digits.remove_prefix(2); break;
+      case 'o': case 'O': base = 8; digits.remove_prefix(2); break;
+      case 'x': case 'X': base = 16; digits.remove_prefix(2); break;
+      default: break;
+    }
+  }
+  const auto digit_value = [](char c) -> unsigned {
+    if (c >= '0' && c <= '9') return unsigned(c - '0');
+    if (c >= 'a' && c <= 'f') return unsigned(c - 'a') + 10;
+    if (c >= 'A' && c <= 'F') return unsigned(c - 'A') + 10;
+    return 16;
+  };
+  if (!digits.empty() && std::all_of(digits.begin(), digits.end(),
+                                    [&](char c) { return digit_value(c) < base; })) {
+    return token{negative ? token_type::number_int : token_type::number_uint,
+                 s, true, false, true};
   }
 
   double float_value = 0;

@@ -74,6 +74,7 @@ struct parser {
 
   size_t ignore_depth = 0;
   block_modes pending_modes;
+  block_modes default_modes;
 
   parser() noexcept;
 
@@ -89,8 +90,12 @@ struct parser {
   // tavl::release_consumed(p, ctx) for the latter, and retain bytes for any caller-owned tokens.
   size_t consumed_offset() const;
   void release_before(size_t offset);   // after release, content() for discarded spans is empty
+  size_t released_offset() const noexcept;
+  std::string_view live_source() const noexcept; // bytes from released_offset(); invalidated by flush/release_before/clear
 
   // Block modes are inherited by nested blocks.
+  // Applies to the root immediately and survives clear().
+  void set_default_block_modes(parse_mode object, parse_mode tuple, parse_mode array);
   void override_next_block_modes(parse_mode object, parse_mode tuple, parse_mode array);
   void clear_pending_block_modes();
 

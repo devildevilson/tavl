@@ -108,6 +108,52 @@ TEST_CASE("parser: the mode override is inherited by descendants") {
   CHECK(tavl_test::count_event(evs, event_type::object_begin) == 2);
 }
 
+TEST_CASE("parser: default block modes apply to root, descendants, and clear") {
+  tavl::parser p;
+  p.add_default_operator();
+  p.set_default_block_modes(parse_mode::data_driven, parse_mode::data_driven,
+                            parse_mode::data_driven);
+  for (int i = 0; i < 2; ++i) {
+    const auto evs = tavl_test::poll_all(p, "root = { nested = (a = b) }");
+    CHECK(tavl_test::count_event(evs, event_type::got_row_identifier) == 0);
+    CHECK(tavl_test::count_event(evs, event_type::got_token) == 7);
+    CHECK_FALSE(tavl_test::has_critical(evs));
+  }
+
+  p.override_next_block_modes(parse_mode::object_like, parse_mode::object_like,
+                              parse_mode::object_like);
+  const auto evs = tavl_test::poll_all(p, "{ a = b }, { c = d }");
+  // poll_all clears transient overrides, so exercise the one-shot setting directly below.
+  CHECK(tavl_test::count_event(evs, event_type::got_row_identifier) == 0);
+  p.clear();
+  p.override_next_block_modes(parse_mode::object_like, parse_mode::object_like,
+                              parse_mode::object_like);
+  p.flush("{ a = b }, { c = d }");
+  p.finish();
+  size_t ids = 0;
+  while (true) {
+    const auto ev = std::get<0>(p.poll_event());
+    if (ev.type == event_type::got_row_identifier) ++ids;
+    if (ev.type == event_type::eof) break;
+  }
+  CHECK(ids == 1);
+}
+
+TEST_CASE("parser: live source exposes only retained bytes at their absolute offset") {
+  tavl::parser p;
+  p.flush("abcdef");
+  CHECK(p.released_offset() == 0);
+  CHECK(p.live_source() == "abcdef");
+  p.release_before(2);
+  CHECK(p.released_offset() == 2);
+  CHECK(p.live_source() == "cdef");
+  p.flush("gh");
+  CHECK(p.live_source() == "cdefgh");
+  p.clear();
+  CHECK(p.released_offset() == 0);
+  CHECK(p.live_source().empty());
+}
+
 TEST_CASE("parser: a row identifier can be any token except brackets") {
   tavl::parser p;
   p.add_default_operator();

@@ -82,11 +82,19 @@ void parser::clear() noexcept {
 
   stack.clear();
   stack.emplace_back();
+  stack.front().modes = default_modes;
+  stack.front().row_mode = default_modes.active ? default_modes.tuple : parse_mode::tuple_like;
   events.clear();
   event_cursor = 0;
 
   ignore_depth = 0;
   pending_modes = block_modes{};
+}
+
+void parser::set_default_block_modes(parse_mode object, parse_mode tuple, parse_mode array) {
+  default_modes = block_modes{true, object, tuple, array};
+  stack.front().modes = default_modes;
+  stack.front().row_mode = tuple;
 }
 
 void parser::override_next_block_modes(parse_mode object, parse_mode tuple, parse_mode array) {
@@ -122,6 +130,14 @@ void parser::release_before(size_t offset) {
   storage.release_before(offset);
 }
 
+size_t parser::released_offset() const noexcept {
+  return storage.released_offset();
+}
+
+std::string_view parser::live_source() const noexcept {
+  return storage.live_source();
+}
+
 static event_type end_event_for(const block_type type) noexcept {
   switch (type) {
     case block_type::object: return event_type::object_end;
@@ -135,6 +151,10 @@ static event_type end_event_for(const block_type type) noexcept {
 
 // Queue an event with its attached error, if any.
 void parser::emit(const event& ev, error err) {
+  if (ev.token.integer_out_of_range &&
+      (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) &&
+      !err.is_critical())
+    err = error{error_type::err_number_out_of_range, ev.token.span};
   if (ev.token.float_out_of_range &&
       (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) &&
       !err.is_critical())
@@ -578,7 +598,7 @@ std::optional<uint64_t> parser::to_uint(const token& t) const {
 
 std::optional<double> parser::to_float(const token& t) const {
   if (t.type != token_type::number_float && t.type != token_type::number_int && t.type != token_type::number_uint) return std::nullopt;
-  if (t.float_out_of_range) return std::nullopt;
+  if (t.float_out_of_range || t.integer_out_of_range) return std::nullopt;
 
   auto cont = content(t.span);
 

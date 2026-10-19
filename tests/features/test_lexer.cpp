@@ -46,14 +46,42 @@ TEST_CASE("lexer: zero with a float exponent or suffix remains a float") {
   CHECK(types == std::vector<token_type>(5, token_type::number_float));
 }
 
-TEST_CASE("lexer: an overflowing integer spelling is not reclassified as float") {
+TEST_CASE("lexer: overflowing integers retain numeric tokens and report range errors") {
   tavl::parser p;
   const auto evs = tavl_test::poll_all(p,
-      "[18446744073709551616, -9223372036854775809, 18446744073709551616e0]");
+      "[9223372036854775808, 18446744073709551616, -9223372036854775809, 0x10000000000000000, 18446744073709551616e0]");
   const auto types = tavl_test::got_token_types(evs);
-  CHECK(types == std::vector<token_type>{token_type::unrecognized,
-                                         token_type::unrecognized,
+  CHECK(types == std::vector<token_type>{token_type::number_uint,
+                                         token_type::number_uint,
+                                         token_type::number_int,
+                                         token_type::number_uint,
                                          token_type::number_float});
+  size_t range_errors = 0;
+  for (const auto& e : evs) {
+    if (e.error.type == tavl::error_type::err_number_out_of_range) {
+      ++range_errors;
+      CHECK(e.event.token.integer_out_of_range);
+      CHECK_FALSE(p.to_int(e.event.token));
+      CHECK_FALSE(p.to_uint(e.event.token));
+      CHECK_FALSE(p.to_float(e.event.token));
+    }
+  }
+  CHECK(range_errors == 3);
+}
+
+TEST_CASE("lexer: signed exponents stay in one token with arithmetic operators") {
+  tavl::parser p;
+  p.add_math_default_operators();
+  const auto evs = tavl_test::poll_all(p, "[1e-3, 1.5e+3, 1E-3, 1e-4000, 1e+3+2]");
+  CHECK(tavl_test::got_token_types(evs) == std::vector<token_type>{
+    token_type::number_float, token_type::number_float, token_type::number_float,
+    token_type::number_float, token_type::number_float, token_type::op,
+    token_type::number_int});
+  CHECK(tavl_test::has_error(evs, tavl::error_type::err_float_out_of_range));
+  for (const auto& e : evs) {
+    if (e.event.type == event_type::got_token && e.event.token.type == token_type::number_float)
+      CHECK(p.content(e.event.token.span).find_first_of("eE") != std::string_view::npos);
+  }
 }
 
 TEST_CASE("lexer: operators are split by longest-match") {
@@ -230,13 +258,15 @@ TEST_CASE("lexer: malformed scalar tokens are reported as unrecognized") {
 }
 
 TEST_CASE("lexer: byte-by-byte streaming yields the same token stream as all at once") {
-  const std::string_view src = "[null, 42, \"a b\", ident]";
+  const std::string_view src = "[null, 42, 1e-3, 1.5e+3, \"a b\", ident]";
 
   tavl::parser whole;
+  whole.add_math_default_operators();
   const auto a = tavl_test::got_token_types(tavl_test::poll_all(whole, src));
 
   // byte by byte
   tavl::parser stream;
+  stream.add_math_default_operators();
   stream.clear();
   std::vector<token_type> b;
   size_t i = 0;

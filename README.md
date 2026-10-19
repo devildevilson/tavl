@@ -64,8 +64,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 The library target is `tavl`, the CLI is `build/bin/tavl`, and the test runner
-is `tavl_tests`. Use `-DTAVL_BUILD_TESTS=OFF` when building only the library
-and CLI.
+is `tavl_tests`. Tests and CLI are enabled by default only for a top-level build;
+consumers can enable either with `TAVL_BUILD_TESTS` and `TAVL_BUILD_CLI`.
 
 ## Command-line tool
 

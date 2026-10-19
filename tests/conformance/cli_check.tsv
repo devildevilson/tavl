@@ -14,6 +14,7 @@ tuple_missing_value	a=(x=)	2	err_missing_value
 unknown_value	a=word@word	0	unrecognized token in default TAVL profile
 invalid_escape	a="\q"	2	err_invalid_escape
 float_overflow	a=1e4000	2	err_float_out_of_range
+integer_overflow	a=99999999999999999999999	2	err_number_out_of_range
 duplicate_object	a={x=1,x=2}	2	err_duplicate_field
 duplicate_tuple	a=(x=1,x=2)	2	err_duplicate_field
 repeated_root	x=1\nx=2	0	-

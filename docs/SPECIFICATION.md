@@ -60,8 +60,8 @@ structural token or an automatic parser reset.
 A scalar ends at whitespace, a comma, a bracket, or a quote. A registered
 symbolic operator may split an otherwise contiguous scalar; the longest
 registered spelling wins. In the ordinary profile only `=` has that role.
-Scalar classification takes place in this order: date/time; registered
-operators; null; boolean; prefixed unsigned integer; decimal signed integer;
+Scalar classification takes place in this order: date/time; decimal floats with
+exponent signs; registered operators; null; boolean; prefixed unsigned integer; decimal signed integer;
 decimal unsigned integer; floating point; identifier; `unrecognized`.
 `unrecognized` retains its exact source span and is recoverable, since a
 derived profile may assign it meaning. The ordinary CLI warns about it.
@@ -78,8 +78,10 @@ derived profile may assign it meaning. The ordinary CLI warns about it.
 | Decimal float | A finite decimal spelling with a point, exponent, or `f`/`F`/`d`/`D` suffix, optionally signed; also signed `nan`/`NAN`/`NaN` or `inf`/`INF` |
 | Date/time | `YYYY-MM-DD`, `HH:MM:SS`, or `YYYY-MM-DD[T|_]HH:MM:SS`, optionally with one to nine fractional second digits and a timezone on a time form |
 
-An integer-looking spelling outside the 64-bit ranges is `unrecognized`; it
-does not silently become a float. A spelling such as `0e2` or `0f` is a float.
+An integer-looking spelling outside the 64-bit ranges retains its numeric token
+type and reports `err_number_out_of_range`; it does not silently become a float.
+A spelling such as `0e2` or `0f` is a float. A registered `+` or `-` operator
+does not split the exponent sign in a float.
 
 The ordinary float value is IEEE 754 binary64. A finite decimal spelling
 denotes an exact decimal rational, rounded once to binary64 using

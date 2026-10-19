@@ -34,6 +34,8 @@ public:
   void release_before(const size_t offset);
   bool truncate_after(size_t absolute_offset); // keep bytes before this absolute offset
   size_t buffer_size() const;   // live bytes after release_before
+  size_t released_offset() const noexcept; // absolute offset of the first live byte
+  std::string_view live_source() const noexcept; // view invalidated by append/release/clear
 
   void clear();
 private:

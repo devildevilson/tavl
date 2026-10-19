@@ -4,7 +4,8 @@ include(FetchContent)
 
 project(tavl LANGUAGES CXX)
 
-option(TAVL_BUILD_TESTS "Build the tavl test suite (doctest)" ON)
+option(TAVL_BUILD_TESTS "Build the tavl test suite (doctest)" ${PROJECT_IS_TOP_LEVEL})
+option(TAVL_BUILD_CLI "Build the tavl command-line tool" ${PROJECT_IS_TOP_LEVEL})
 # ISA for auto-vectorizing tavl's own sources. Applied PRIVATE; not forced on
 # consumers (they pick their own arch). No SIMD intrinsics in headers, so no ABI impact.
 set(TAVL_ARCH "AVX" CACHE STRING "ISA baseline for tavl sources: OFF, AVX, AVX2, NATIVE")
@@ -117,9 +118,11 @@ target_include_directories(tavl PUBLIC
   "${reflect_SOURCE_DIR}"
 )
 
-add_executable(tavl_cli tools/tavl_cli.cpp)
-set_target_properties(tavl_cli PROPERTIES OUTPUT_NAME tavl)
-target_link_libraries(tavl_cli PRIVATE tavl)
+if (TAVL_BUILD_CLI)
+  add_executable(tavl_cli tools/tavl_cli.cpp)
+  set_target_properties(tavl_cli PROPERTIES OUTPUT_NAME tavl)
+  target_link_libraries(tavl_cli PRIVATE tavl)
+endif()
 
 if (TAVL_BUILD_TESTS)
   enable_testing()
