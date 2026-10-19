@@ -93,6 +93,7 @@ set(TAVL_HDR
 
 set(TAVL_SRC
   src/detail.cpp
+  src/float.cpp
   src/lexer.cpp
   src/parser.cpp
   src/ext.cpp
@@ -115,6 +116,10 @@ target_include_directories(tavl PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${reflect_SOURCE_DIR}"
 )
+
+add_executable(tavl_cli tools/tavl_cli.cpp)
+set_target_properties(tavl_cli PROPERTIES OUTPUT_NAME tavl)
+target_link_libraries(tavl_cli PRIVATE tavl)
 
 if (TAVL_BUILD_TESTS)
   enable_testing()

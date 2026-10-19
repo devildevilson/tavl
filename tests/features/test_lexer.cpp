@@ -39,6 +39,23 @@ TEST_CASE("lexer: signed numbers without a registered '-'") {
   CHECK(t[2] == token_type::number_int);
 }
 
+TEST_CASE("lexer: zero with a float exponent or suffix remains a float") {
+  tavl::parser p;
+  const auto evs = tavl_test::poll_all(p, "[0e2, 00e-3, 0f, -0F, +0d]");
+  const auto types = tavl_test::got_token_types(evs);
+  CHECK(types == std::vector<token_type>(5, token_type::number_float));
+}
+
+TEST_CASE("lexer: an overflowing integer spelling is not reclassified as float") {
+  tavl::parser p;
+  const auto evs = tavl_test::poll_all(p,
+      "[18446744073709551616, -9223372036854775809, 18446744073709551616e0]");
+  const auto types = tavl_test::got_token_types(evs);
+  CHECK(types == std::vector<token_type>{token_type::unrecognized,
+                                         token_type::unrecognized,
+                                         token_type::number_float});
+}
+
 TEST_CASE("lexer: operators are split by longest-match") {
   tavl::parser p;
   p.add_math_default_operators();              // registers =, +, -, *, ==, <=, ...

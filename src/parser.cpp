@@ -11,8 +11,8 @@ std::string_view parser::content(const source_span& span) const {
   return storage.resolve({span.offset, span.size});
 }
 
-// C++-like precedence: higher number binds tighter. Defaults include assignment and comparisons;
-// math operators are opt-in.
+// C++-like precedence: higher number binds tighter. The ordinary profile only
+// registers assignment; comparisons and math operators are opt-in.
 void parser::add_default_operator() {
   add_operator("=", op_fixity::binary, 1, op_assoc::right);   // right-associative assignment
 }
@@ -83,6 +83,7 @@ void parser::clear() noexcept {
   stack.clear();
   stack.emplace_back();
   events.clear();
+  event_cursor = 0;
 
   ignore_depth = 0;
   pending_modes = block_modes{};
@@ -102,7 +103,8 @@ void parser::flush(const std::string_view& data) {
 
 size_t parser::consumed_offset() const {
   size_t b = lexer.token_offset();
-  for (const auto& pe : events) {
+  for (size_t i = event_cursor; i < events.size(); ++i) {
+    const auto& pe = events[i];
     const size_t o = pe.event.token.span.offset;
     if (o != SIZE_MAX && o < b) b = o;
   }
@@ -133,6 +135,48 @@ static event_type end_event_for(const block_type type) noexcept {
 
 // Queue an event with its attached error, if any.
 void parser::emit(const event& ev, error err) {
+  if (ev.token.float_out_of_range &&
+      (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) &&
+      !err.is_critical())
+    err = error{error_type::err_float_out_of_range, ev.token.span};
+  if (!ev.token.terminated &&
+      (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier ||
+       ev.type == event_type::got_comment)) {
+    const error_type t = ev.token.type == token_type::block_comment
+      ? error_type::err_unterminated_block_comment
+      : error_type::err_unterminated_string;
+    err = error{t, ev.token.span};
+  }
+  if (ev.token.type == token_type::doublequote_string && ev.token.terminated &&
+      (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier)) {
+    const auto raw = content(ev.token.span);
+    if (raw.size() >= 2) {
+      const auto body = raw.substr(1, raw.size() - 2);
+      if (const auto bad = invalid_doublequote_escape(body)) {
+        source_span span{ev.token.span.offset + 1 + *bad, 1,
+                         ev.token.span.line, ev.token.span.column};
+        for (size_t i = 0; i < 1 + *bad; ++i) {
+          if (raw[i] == '\n') { ++span.line; span.column = 1; }
+          else ++span.column;
+        }
+        err = error{error_type::err_invalid_escape, span};
+      }
+    }
+  }
+  if ((ev.type == event_type::got_token || ev.type == event_type::got_row_identifier ||
+       ev.type == event_type::got_row_operator || ev.type == event_type::got_comment) &&
+      !err.is_critical()) {
+    const auto raw = content(ev.token.span);
+    if (const auto issue = invalid_source_text(raw)) {
+      source_span span{ev.token.span.offset + issue->offset, issue->size,
+                       ev.token.span.line, ev.token.span.column};
+      for (size_t i = 0; i < issue->offset; ++i) {
+        if (raw[i] == '\n') { ++span.line; span.column = 1; }
+        else ++span.column;
+      }
+      err = error{issue->type, span};
+    }
+  }
   events.push_back({ev, err});
 }
 
@@ -150,12 +194,16 @@ void parser::close_row(const token& end_tok) {
   if (!f.has_row()) return;
 
   error row_err{};
-  if (f.row_mode == parse_mode::object_like && !f.has_value()) {
+  if (f.op.exists() && f.row_mode != parse_mode::data_driven && !f.has_value() &&
+      operator_info(content(f.op.span), op_fixity::binary)) {
+    row_err = error{error_type::err_missing_value, row_span(f, end_tok)};
+  } else if (f.row_mode == parse_mode::object_like && !f.has_value()) {
     row_err = error{error_type::warn_object_without_value, row_span(f, end_tok)};
   }
 
   if (!f.has_value()) {
-    if (f.row_mode == parse_mode::object_like) {
+    if (f.row_mode == parse_mode::object_like ||
+        (f.row_mode == parse_mode::tuple_like && f.op.exists())) {
       // In an object, a lone id/operator is still the row key/operator.
       if (f.has_identifier()) emit(event{event_type::got_row_identifier, f.identifier});
       if (f.op.exists())      emit(event{event_type::got_row_operator, f.op});
@@ -208,10 +256,14 @@ void parser::open_block(const token& c, block_type bt, event_type begin_ev) {
   }
 
   error id_err{};
+  if (stack.back().leading_binary_operator) {
+    id_err = error{error_type::err_expected_identifier, stack.back().last_value.span};
+    stack.back().leading_binary_operator = false;
+  }
   // At block start, object-like rows must already have a key.
   if (stack.back().row_mode == parse_mode::object_like &&
       !stack.back().has_value() && !stack.back().has_identifier()) {
-    id_err = error{error_type::warn_expected_identifier, c.span};
+    if (id_err.no_error()) id_err = error{error_type::warn_expected_identifier, c.span};
   }
 
   if (!stack.back().has_row()) emit(event{event_type::row_begin, c});
@@ -296,12 +348,23 @@ void parser::fill_events() {
           }
 
           error id_err{};
+          if (stack.back().leading_binary_operator) {
+            id_err = error{error_type::err_expected_identifier, stack.back().last_value.span};
+            stack.back().leading_binary_operator = false;
+          }
           if (
             stack.back().row_mode == parse_mode::object_like &&
             !stack.back().has_value() &&
             !stack.back().has_identifier()
           ) {
-            id_err = error{error_type::warn_expected_identifier, c.span};
+            id_err = error{error_type::err_expected_identifier, c.span};
+          }
+
+          if (stack.back().row_mode == parse_mode::tuple_like &&
+              !stack.back().has_identifier() && !stack.back().has_value() &&
+              operator_info(content(c.span), op_fixity::binary) &&
+              !operator_info(content(c.span), op_fixity::prefix)) {
+            stack.back().leading_binary_operator = true;
           }
 
           // Flush delayed identifier/operator before emitting data.
@@ -333,7 +396,7 @@ void parser::fill_events() {
         case token_type::datetime:
         case token_type::identifier:
         case token_type::doublequote_string:
-        case token_type::singlequote_string:
+        case token_type::singlequote_string: {
           if (!stack.back().has_row()) {
             emit(event{event_type::row_begin, c});
           }
@@ -366,9 +429,15 @@ void parser::fill_events() {
             }
           }
 
+          error value_err{};
+          if (stack.back().leading_binary_operator) {
+            value_err = error{error_type::err_expected_identifier, stack.back().last_value.span};
+            stack.back().leading_binary_operator = false;
+          }
           stack.back().last_value = c;
-          emit(event{event_type::got_token, c});
+          emit(event{event_type::got_token, c}, value_err);
           break;
+        }
 
         case token_type::eof:
           // End of input: close the pending row and every unclosed block, reporting each block at
@@ -404,8 +473,11 @@ void parser::fill_events() {
 std::tuple<event, error> parser::poll_event() {
   fill_events();
   if (!events.empty()) {
-    const auto pe = events.front();
-    events.erase(events.begin());
+    const auto pe = events[event_cursor++];
+    if (event_cursor == events.size()) {
+      events.clear();
+      event_cursor = 0;
+    }
     return {pe.event, pe.error};
   }
   return {event{event_type::not_enought_data, {}}, error{}};
@@ -414,7 +486,7 @@ std::tuple<event, error> parser::poll_event() {
 // Non-consuming lookahead, used for stream classification.
 event parser::peek() {
   fill_events();
-  if (!events.empty()) return events.front().event;
+  if (!events.empty()) return events[event_cursor].event;
   return event{event_type::not_enought_data, {}};
 }
 
@@ -424,32 +496,40 @@ void parser::finish() {
   lexer.finish();
 }
 std::string parser::to_string(const token& t) const {
-  if (!t.exists()) return std::string();
+  std::string result;
+  to_string(t, result);
+  return result;
+}
+
+void parser::to_string(const token& t, std::string& output) const {
+  output.clear();
+  if (!t.exists()) return;
 
   auto cont = content(t.span);
-  if (cont.empty()) return {};
+  if (cont.empty()) return;
   if (t.type != token_type::doublequote_string && t.type != token_type::singlequote_string) {
-    return std::string(cont);
+    output.assign(cont);
+    return;
   }
 
-  std::string str;
-  str.reserve(cont.size());
+  output.reserve(cont.size());
 
   if (t.type == token_type::singlequote_string) {
     cont.remove_prefix(1);
     if (!cont.empty() && cont.back() == '\'') cont.remove_suffix(1);
 
-    unescape_singlequote_string(cont, str);
-    return str;
+    unescape_singlequote_string(cont, output);
+    return;
   }
 
   // doublequote_string: standard escapes plus \u/\U Unicode.
   cont.remove_prefix(1);
   if (!cont.empty() && cont.back() == '\"') cont.remove_suffix(1);
 
-  unescape_doublequote_string(cont, str);
+  // Preserve the raw body for recovery; the event already carries err_invalid_escape.
+  if (invalid_doublequote_escape(cont)) { output.assign(cont); return; }
 
-  return str;
+  unescape_doublequote_string(cont, output);
 }
 
 std::optional<bool> parser::to_boolean(const token& t) const {
@@ -498,21 +578,27 @@ std::optional<uint64_t> parser::to_uint(const token& t) const {
 
 std::optional<double> parser::to_float(const token& t) const {
   if (t.type != token_type::number_float && t.type != token_type::number_int && t.type != token_type::number_uint) return std::nullopt;
+  if (t.float_out_of_range) return std::nullopt;
 
   auto cont = content(t.span);
 
   if (t.type == token_type::number_int) {
-    if (const auto v = to_int(t)) return static_cast<double>(*v);
+    if (const auto v = to_int(t)) {
+      const bool negative = *v < 0;
+      const uint64_t magnitude = negative
+        ? uint64_t{0} - static_cast<uint64_t>(*v) : static_cast<uint64_t>(*v);
+      return integer_to_binary64(magnitude, negative);
+    }
     return std::nullopt;
   }
 
   if (t.type == token_type::number_uint) {
-    if (const auto v = to_uint(t)) return static_cast<double>(*v);
+    if (const auto v = to_uint(t)) return integer_to_binary64(*v);
     return std::nullopt;
   }
 
   double v = 0;
-  if (is_float_number(cont, v)) return v;
+  if (lexer.parse_float(cont, v) == float_parse_result::valid) return v;
   return std::nullopt;
 }
 

@@ -49,6 +49,7 @@ struct ct_context {
     size_t pos = 0;                     // current sub-element index, or number of completed slots
     size_t next = 0;                    // positional counter / array index
     bool in_element = false;            // a sub-element has started but not finished
+    bool element_done = false;          // an array row value is read; its row boundary is pending
     bool positional = false;            // current aggregate sub-element came from positional input
     bool skipping = false;              // resumable ds_skip_value is in progress
     size_t skip_depth = 0;              // bracket depth for an unfinished skip
@@ -60,6 +61,7 @@ struct ct_context {
   struct diagnostic { struct error error; std::string_view field; };
 
   std::optional<event> peeked;          // one-event lookahead; not_enought_data is never cached
+  std::optional<event> replayed;        // a positional row identifier kept after operator lookahead
   std::deque<frame> frames;             // level stack used for resume
   size_t cursor = 0;                    // re-entry cursor through frames, reset by the outer scope
   bool stalled = false;                 // not_enought_data was hit; unwind outward
@@ -137,7 +139,15 @@ template <typename T>
 void deserialize(parser& p, ct_context& ctx, T& val) {
   ct_scope _scope(ctx);
 
-  if constexpr (std::is_same_v<T, bool>) {
+  if constexpr (std::is_same_v<T, token>) {
+    const event ev = ds_peek_scalar(p, ctx, error_type::err_expect_scalar);
+    if (ctx.stalled) return;
+    if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
+      val = ev.token;
+      ct_next(p, ctx);
+    }
+  }
+  else if constexpr (std::is_same_v<T, bool>) {
     const event ev = ds_peek_scalar(p, ctx, error_type::err_expect_token_boolean);
     if (ctx.stalled) return;
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
@@ -152,11 +162,23 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       if constexpr (std::is_signed_v<T>) {
-        if (const auto v = p.to_int(ev.token)) val = static_cast<T>(*v);   // to_int accepts int and uint hex/oct/bin
-        else ctx.push_diagnostic(error{error_type::err_expect_token_number_int, ev.token.span});
+        if (const auto v = p.to_int(ev.token)) {
+          if (std::in_range<T>(*v)) val = static_cast<T>(*v);
+          else ctx.push_diagnostic(error{error_type::err_number_out_of_range, ev.token.span});
+        } else {
+          const bool numeric = ev.token.type == token_type::number_int || ev.token.type == token_type::number_uint;
+          ctx.push_diagnostic(error{numeric ? error_type::err_number_out_of_range
+                                            : error_type::err_expect_token_number_int, ev.token.span});
+        }
       } else {
-        if (const auto v = p.to_uint(ev.token)) val = static_cast<T>(*v);
-        else ctx.push_diagnostic(error{error_type::err_expect_token_number_uint, ev.token.span});
+        if (const auto v = p.to_uint(ev.token)) {
+          if (std::in_range<T>(*v)) val = static_cast<T>(*v);
+          else ctx.push_diagnostic(error{error_type::err_number_out_of_range, ev.token.span});
+        } else {
+          const bool numeric = ev.token.type == token_type::number_int || ev.token.type == token_type::number_uint;
+          ctx.push_diagnostic(error{numeric ? error_type::err_number_out_of_range
+                                            : error_type::err_expect_token_number_uint, ev.token.span});
+        }
       }
     }
   }
@@ -170,16 +192,28 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     }
   }
   else if constexpr (ds_is_time_point<T>::value || ds_is_duration<T>::value) {
-    // datetime token -> Unix milliseconds (UTC). time_point is built from epoch duration; duration
-    // receives the raw epoch-millisecond value without calendar semantics.
+    // A timezone-free token is local wall time; Z and numeric offsets are absolute.
     const event ev = ds_peek_scalar(p, ctx, error_type::err_expect_scalar);
     if (ctx.stalled) return;
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
       if (const auto dt = p.to_datetime(ev.token)) {
-        const auto ms = detail::iso_datetime_to_unix_ms(*dt);
-        if constexpr (ds_is_time_point<T>::value) val = T{std::chrono::duration_cast<typename T::duration>(ms)};
-        else                                      val = std::chrono::duration_cast<T>(ms);
+        const auto ns = detail::iso_datetime_to_unix_ns(*dt);
+        if (!ns) {
+          ctx.push_diagnostic(error{error_type::err_datetime_out_of_range, ev.token.span});
+        } else {
+          if constexpr (ds_is_time_point<T>::value) {
+            const auto converted = std::chrono::duration_cast<typename T::duration>(*ns);
+            if (std::chrono::duration_cast<std::chrono::nanoseconds>(converted) != *ns)
+              ctx.push_diagnostic(error{error_type::err_datetime_precision_loss, ev.token.span});
+            else val = T{converted};
+          } else {
+            const auto converted = std::chrono::duration_cast<T>(*ns);
+            if (std::chrono::duration_cast<std::chrono::nanoseconds>(converted) != *ns)
+              ctx.push_diagnostic(error{error_type::err_datetime_precision_loss, ev.token.span});
+            else val = converted;
+          }
+        }
       }
     }
   }
@@ -196,7 +230,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     if (ctx.stalled) return;
     if (ev.type == event_type::got_token || ev.type == event_type::got_row_identifier) {
       ct_next(p, ctx);
-      ctx.strbuf = p.to_string(ev.token);                  // context buffer avoids local containers
+      p.to_string(ev.token, ctx.strbuf);                  // reuse the context buffer
       char* data; size_t n;
       if constexpr (std::is_array_v<T>) { data = val; n = std::extent_v<T>; }
       else                              { data = val.data(); n = val.size(); }
@@ -281,11 +315,24 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       if (ctx.stalled) return;
       fr.in_element = false;
       fr.next = fr.pos + 1;
+      if (fr.term == event_type::array_end) fr.element_done = true;
     }
 
     while (true) {
       const event ev = ct_peek(p, ctx);
       if (ctx.stalled) return;
+      if (fr.term == event_type::array_end && fr.element_done) {
+        if (ev.type == event_type::got_comment) { ct_next(p, ctx); continue; }
+        if (fr.skipping) {
+          if (ds_skip_framed(p, ctx, fr)) return;
+        } else if (ev.type != event_type::row_end && ev.type != event_type::array_end &&
+                   ev.type != event_type::eof) {
+          ctx.push_diagnostic(error{error_type::err_too_many_values, ev.token.span});
+          if (ds_skip_framed(p, ctx, fr)) return;
+        }
+        fr.element_done = false;
+        continue;
+      }
 
       if (ev.type == event_type::eof) break;
       if (ev.type == fr.term) { if (ds_is_block_end(fr.term)) ct_next(p, ctx); break; }
@@ -301,6 +348,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       if (ctx.stalled) return;
       fr.in_element = false;
       fr.next = fr.pos + 1;
+      if (fr.term == event_type::array_end) fr.element_done = true;
     }
     if (fr.next != val.size()) ctx.push_diagnostic(error{error_type::err_too_many_values, {}});  // size mismatch
     ctx.frames.pop_back(); ctx.cursor = ctx.frames.size();
@@ -310,9 +358,25 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
     bool resuming; const size_t fi = ds_enter(p, ctx, resuming, event_type::row_end);
     if (ctx.stalled) return;
     auto& fr = ctx.frames[fi];
-    if (fr.in_element) { deserialize(p, ctx, val.back()); if (ctx.stalled) return; fr.in_element = false; }
+    if (fr.in_element) {
+      deserialize(p, ctx, val.back()); if (ctx.stalled) return;
+      fr.in_element = false;
+      fr.element_done = true;
+    }
     while (true) {
       const event ev = ct_peek(p, ctx); if (ctx.stalled) return;
+      if (fr.term == event_type::array_end && fr.element_done) {
+        if (ev.type == event_type::got_comment) { ct_next(p, ctx); continue; }
+        if (fr.skipping) {
+          if (ds_skip_framed(p, ctx, fr)) return;
+        } else if (ev.type != event_type::row_end && ev.type != event_type::array_end &&
+                   ev.type != event_type::eof) {
+          ctx.push_diagnostic(error{error_type::err_too_many_values, ev.token.span});
+          if (ds_skip_framed(p, ctx, fr)) return;
+        }
+        fr.element_done = false;
+        continue;
+      }
       if (ev.type == event_type::eof) break;
       if (ev.type == fr.term) { if (ds_is_block_end(fr.term)) ct_next(p, ctx); break; }
       if (ev.type == event_type::row_begin || ev.type == event_type::row_end ||
@@ -322,6 +386,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       deserialize(p, ctx, val.back());
       if (ctx.stalled) return;
       fr.in_element = false;
+      if (fr.term == event_type::array_end) fr.element_done = true;
     }
     ctx.frames.pop_back(); ctx.cursor = ctx.frames.size();
   }
@@ -361,9 +426,22 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       deserialize(p, ctx, *std::any_cast<E>(&fr.carry)); if (ctx.stalled) return;
       val.insert(std::move(*std::any_cast<E>(&fr.carry)));
       fr.in_element = false; fr.carry.reset();
+      if (fr.term == event_type::array_end) fr.element_done = true;
     }
     while (true) {
       const event ev = ct_peek(p, ctx); if (ctx.stalled) return;
+      if (fr.term == event_type::array_end && fr.element_done) {
+        if (ev.type == event_type::got_comment) { ct_next(p, ctx); continue; }
+        if (fr.skipping) {
+          if (ds_skip_framed(p, ctx, fr)) return;
+        } else if (ev.type != event_type::row_end && ev.type != event_type::array_end &&
+                   ev.type != event_type::eof) {
+          ctx.push_diagnostic(error{error_type::err_too_many_values, ev.token.span});
+          if (ds_skip_framed(p, ctx, fr)) return;
+        }
+        fr.element_done = false;
+        continue;
+      }
       if (ev.type == event_type::eof) break;
       if (ev.type == fr.term) { if (ds_is_block_end(fr.term)) ct_next(p, ctx); break; }
       if (ev.type == event_type::row_begin || ev.type == event_type::row_end ||
@@ -372,6 +450,7 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       deserialize(p, ctx, *std::any_cast<E>(&fr.carry)); if (ctx.stalled) return;
       val.insert(std::move(*std::any_cast<E>(&fr.carry)));
       fr.in_element = false; fr.carry.reset();
+      if (fr.term == event_type::array_end) fr.element_done = true;
     }
     ctx.frames.pop_back(); ctx.cursor = ctx.frames.size();
   }
@@ -398,30 +477,55 @@ void deserialize(parser& p, ct_context& ctx, T& val) {
       if (ev.type == event_type::row_begin || ev.type == event_type::row_end ||
           ev.type == event_type::empty_row || ev.type == event_type::got_comment) { ct_next(p, ctx); continue; }
 
-      if (ev.type == event_type::got_row_identifier) {     // named: row id -> field
-        const auto name = p.content(ev.token.span);
-        const auto name_span = ev.token.span;
-        ct_next(p, ctx);
-        size_t found = SIZE_MAX, counter = 0;
-        std::string_view fname{};   // static member_name; unlike parser-buffer name, it stays valid
+      size_t found = SIZE_MAX;
+      std::string_view fname{};
+      if (ev.type == event_type::got_row_identifier) {
+        const auto name = p.to_string(ev.token);
+        size_t counter = 0;
         reflect::for_each([&](auto I) {
-          if (found == SIZE_MAX && name == reflect::member_name<I>(val)) { found = counter; fname = reflect::member_name<I>(val); }
+          if (found == SIZE_MAX && name == reflect::member_name<I>(val)) {
+            found = counter;
+            fname = reflect::member_name<I>(val);
+          }
           counter += 1;
         }, val);
+      }
+
+      const auto type = ev.token.type;
+      const bool nontext_name = type == token_type::number_int || type == token_type::number_uint ||
+                                type == token_type::number_float || type == token_type::boolean ||
+                                type == token_type::null || type == token_type::datetime;
+      bool positional_identifier = false;
+      if (ev.type == event_type::got_row_identifier && found == SIZE_MAX && nontext_name) {
+        // Without an operator, a nontext first token is positional data. Keep it for
+        // the selected field's deserializer after looking ahead for an explicit '='.
+        const event identifier = ct_next(p, ctx);
+        const event next = ct_peek(p, ctx);
+        if (ctx.stalled) { ctx.replayed = identifier; return; }
+        if (next.type == event_type::got_row_operator) {
+          if (ds_skip_framed(p, ctx, fr)) return;          // unknown explicit name
+          continue;
+        }
+        ctx.replayed = identifier;
+        positional_identifier = true;
+      }
+
+      if (ev.type == event_type::got_row_identifier && !positional_identifier) {
+        const auto name_span = ev.token.span;
+        ct_next(p, ctx);
         if (found != SIZE_MAX && found < fr.field_count && fr.seen[found]) {
-          // The field was already filled, either positionally or by name.
           ctx.push_diagnostic(error{error_type::err_duplicate_field, name_span}, fname);
           if (ds_skip_framed(p, ctx, fr)) return;
         } else if (found != SIZE_MAX) {
           fr.seen.set(found);
           fr.pos = found; fr.in_element = true; fr.positional = false;
-          counter = 0;
+          size_t counter = 0;
           reflect::for_each([&](auto I) { if (counter == found) deserialize(p, ctx, reflect::get<I>(val)); counter += 1; }, val);
           if (ctx.stalled) return;
           fr.in_element = false;
-          if (ds_skip_framed(p, ctx, fr)) return;          // skip extra tokens until row_end
+          if (ds_skip_framed(p, ctx, fr)) return;
         } else {
-          if (ds_skip_framed(p, ctx, fr)) return;          // unknown field
+          if (ds_skip_framed(p, ctx, fr)) return;          // unknown text name
         }
       } else {                                             // positional -> first unfilled field
         size_t idx = SIZE_MAX;
@@ -481,12 +585,17 @@ bool deserialize_next(parser& p, ct_context& ctx, T& out) {
 }
 
 // Release already-consumed input while streaming. This considers both parser lookahead and the
-// deserialize-level cached event. After release, content() for discarded spans is empty, but their
-// values have already been copied into the output object.
+// deserialize-level cached event. It does not track tavl::token values stored in the caller's
+// output object: those hold spans, so resolve/copy their text before releasing the row. After
+// release, content() for discarded spans is empty.
 inline void release_consumed(parser& p, ct_context& ctx) {
   size_t boundary = p.consumed_offset();
   if (ctx.peeked) {
     const size_t o = ctx.peeked->token.span.offset;
+    if (o != SIZE_MAX && o < boundary) boundary = o;
+  }
+  if (ctx.replayed) {
+    const size_t o = ctx.replayed->token.span.offset;
     if (o != SIZE_MAX && o < boundary) boundary = o;
   }
   p.release_before(boundary);

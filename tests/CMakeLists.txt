@@ -12,6 +12,7 @@ set(TAVL_TEST_SRC
   doctest_main.cpp
 
   format/test_format_examples.cpp
+  conformance/test_conformance.cpp
 
   features/test_lexer.cpp
   features/test_parser.cpp
@@ -34,7 +35,28 @@ target_include_directories(tavl_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 # tavl demo
 target_compile_definitions(tavl_tests PRIVATE
   TAVL_FORMAT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/format"
+  TAVL_CONFORMANCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/conformance"
 )
 
 include("${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake")
 doctest_discover_tests(tavl_tests)
+
+add_executable(tavl_parser_allocations features/test_parser_allocations.cpp)
+target_link_libraries(tavl_parser_allocations PRIVATE tavl)
+add_test(NAME tavl_parser_allocations COMMAND tavl_parser_allocations)
+
+add_test(
+  NAME tavl_cli
+  COMMAND "${CMAKE_COMMAND}"
+    "-DCLI=$<TARGET_FILE:tavl_cli>"
+    "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cli/test_cli.cmake"
+)
+
+add_test(
+  NAME tavl_cli_conformance
+  COMMAND "${CMAKE_COMMAND}"
+    "-DCLI=$<TARGET_FILE:tavl_cli>"
+    "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/conformance/check_cli.cmake"
+)

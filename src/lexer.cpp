@@ -7,46 +7,63 @@ namespace tavl {
 
 using namespace tavl::detail;
 
+detail::float_parse_result lexer::parse_float(std::string_view text, double& value) const {
+  return parse_float_number(text, value, float_workspace);
+}
+
 std::string_view char_storage::resolve(const span& s) const {
   if (s.offset < offset) return {};
   const size_t final_offset = s.offset - offset;
-  if (final_offset >= storage.size()) return std::string_view();
+  const size_t live_size = storage.size() - begin;
+  if (final_offset >= live_size) return std::string_view();
   if (s.size == 0) return std::string_view();
 
-  return std::string_view(storage.data() + final_offset, std::min(s.size, storage.size() - final_offset));
+  return std::string_view(storage.data() + begin + final_offset, std::min(s.size, live_size - final_offset));
 }
 
 char char_storage::peek(const size_t offset) const {
   if (offset < this->offset) return '\0';
   const size_t final_offset = offset - this->offset;
-  if (final_offset >= storage.size()) return '\0';
-  return storage[final_offset];
+  if (final_offset >= storage.size() - begin) return '\0';
+  return storage[begin + final_offset];
 }
 
 size_t char_storage::size() const {
-  return offset + storage.size();
+  return offset + storage.size() - begin;
 }
 
 char_storage::span char_storage::append(const std::string_view& data) {
+  // Release is O(1). Compact only when new input needs the unused prefix (or
+  // the prefix has grown larger than the live tail), preserving capacity.
+  if (begin && (storage.capacity() - storage.size() < data.size() ||
+                begin > storage.size() / 2)) {
+    storage.erase(storage.begin(), storage.begin() + begin);
+    begin = 0;
+  }
   storage.insert(storage.end(), data.begin(), data.end());
-  return {offset, storage.size()};
+  return {offset, storage.size() - begin};
 }
 
 void char_storage::release_before(const size_t offset) {
   if (offset < this->offset) return;
-  const size_t final_offset = std::min(offset - this->offset, storage.size());
+  const size_t final_offset = std::min(offset - this->offset, storage.size() - begin);
 
-  storage.erase(storage.begin(), storage.begin() + final_offset);
+  begin += final_offset;
   this->offset += final_offset;
+  if (begin == storage.size()) {
+    storage.clear();
+    begin = 0;
+  }
 }
 
 void char_storage::clear() {
   storage.clear();
   offset = 0;
+  begin = 0;
 }
 
 size_t char_storage::buffer_size() const {
-  return storage.size();
+  return storage.size() - begin;
 }
 
 token lexer::lex(const char_storage& storage) {
@@ -238,7 +255,7 @@ token lexer::lex(const char_storage& storage) {
       state.mode = lexer_mode::standard;
 
       state.token_span = {state.offset, 0, state.line, state.column};
-      return token{token_type::doublequote_string, s};
+      return token{token_type::doublequote_string, s, false};
     }
   }
 
@@ -271,7 +288,7 @@ token lexer::lex(const char_storage& storage) {
       state.mode = lexer_mode::standard;
 
       state.token_span = {state.offset, 0, state.line, state.column};
-      return token{token_type::singlequote_string, s};
+      return token{token_type::singlequote_string, s, false};
     }
   }
 
@@ -346,7 +363,7 @@ token lexer::lex(const char_storage& storage) {
       state.comment_delim = false;
 
       state.token_span = {state.offset, 0, state.line, state.column};
-      return token{token_type::block_comment, s};
+      return token{token_type::block_comment, s, false};
     }
   }
 
@@ -556,8 +573,14 @@ token lexer::make_token(const char_storage& storage, size_t local_offset) {
     return token{token_type::number_uint, s};
   }
 
-  if (double v = 0; is_float_number(str, v)) {
-    return token{token_type::number_float, s};
+  double float_value = 0;
+  switch (parse_float(str, float_value)) {
+    case float_parse_result::valid:
+      return token{token_type::number_float, s};
+    case float_parse_result::out_of_range:
+      return token{token_type::number_float, s, true, true};
+    case float_parse_result::invalid:
+      break;
   }
 
   if (is_valid_identificator(str)) {

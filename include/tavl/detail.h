@@ -7,6 +7,8 @@
 #include <string>
 #include <chrono>
 #include <algorithm>
+#include <optional>
+#include <vector>
 
 #include "tavl/common.h"
 
@@ -58,26 +60,93 @@ bool is_oct_number(const std::string_view& str, uint64_t& out);
 bool is_hex_number(const std::string_view& str, uint64_t& out);
 bool is_dec_number(const std::string_view& str, int64_t& out);
 bool is_dec_unsigned_number(const std::string_view& str, uint64_t& out);
+enum class float_parse_result { invalid, valid, out_of_range };
+// The lexer keeps this scratch space across tokens and parser::clear(). Large decimal
+// tokens may grow it, but ordinary parsing then reuses that capacity.
+struct float_big_uint {
+  std::vector<uint32_t> words{0};
+  explicit float_big_uint(uint32_t value = 0) : words{value} {}
+  static float_big_uint from_u64(uint64_t value);
+  void reset(uint32_t value);
+  void copy_from(const float_big_uint& other);
+  void normalize();
+  void mul_small(uint32_t factor);
+  void add_small(uint32_t value);
+  void add(const float_big_uint& other);
+  void shift_left(unsigned bits);
+  void mul_u64(uint64_t factor, float_big_uint& upper);
+  uint32_t div_small(uint32_t divisor);
+  std::string decimal() const;
+  int compare(const float_big_uint& other) const noexcept;
+};
+struct float_parse_workspace {
+  std::string digits;
+  float_big_uint numerator, denominator, left, right, upper;
+};
+float_parse_result parse_float_number(std::string_view str, double& val);
+float_parse_result parse_float_number(std::string_view str, double& val,
+                                      float_parse_workspace& workspace);
 bool is_float_number(const std::string_view& str, double& val);
+double integer_to_binary64(uint64_t magnitude, bool negative = false) noexcept;
+// Deterministic shortest-significand spelling for an IEEE 754 binary64 value.
+// The result is always a TAVL float token and round-trips through parse_float_number.
+std::string format_float_canonical(double value);
 
 bool parse_int(std::string_view& s, int32_t& out, const size_t n);
 bool is_datetime(const std::string_view& str, iso_datetime& data);
+
+// Offset of the first ill-formed UTF-8 byte sequence, if any.
+std::optional<size_t> invalid_utf8(std::string_view input) noexcept;
+// First source-text violation in byte order. Source validation also rejects
+// literal NUL and C0/DEL/C1 controls except TAB/LF/CR/FF/VT.
+struct source_text_issue {
+  error_type type;
+  size_t offset;
+  size_t size;
+};
+std::optional<source_text_issue> invalid_source_text(std::string_view input) noexcept;
 
 // Convert string literal contents (without quotes) into the final string:
 // single quotes have minimal escaping, double quotes support standard escapes and \u/\U Unicode.
 void unescape_singlequote_string(const std::string_view& input, std::string& result);
 void unescape_doublequote_string(const std::string_view& input, std::string& result);
+// Return the offset of the first invalid escape in a double-quoted string body.
+std::optional<size_t> invalid_doublequote_escape(std::string_view input);
 
 // Serialization escape helpers without temporary buffers: each output byte is sent to put(char)->bool.
 // put may return false to stop (for example, bounded output reached capacity), and escape_*_to
 // propagates that false. serialize.h uses this to write straight into the destination string.
 
-// Minimal escape: only backslash and double quote. Strings are multiline, so control chars stay as-is.
+// Minimal escape: syntax bytes and controls forbidden as raw source text.
+// TAB/LF/CR/FF/VT remain literal; C1 UTF-8 sequences become \u00XX.
 template <typename Put>
 bool escape_doublequote_minimal_to(std::string_view input, Put&& put) {
-  for (const char c : input) {
+  constexpr std::string_view hex = "0123456789abcdef";
+  const auto emit_u00 = [&put, hex](unsigned c) {
+    return put('\\') && put('u') && put('0') && put('0') &&
+           put(hex[(c >> 4) & 0xf]) && put(hex[c & 0xf]);
+  };
+  for (size_t i = 0; i < input.size(); ++i) {
+    const auto c = static_cast<unsigned char>(input[i]);
+    if (c < 0x20 && c != '\t' && c != '\n' && c != '\r' &&
+        c != '\f' && c != '\v') {
+      if (!emit_u00(c)) return false;
+      continue;
+    }
+    if (c == 0x7f) {
+      if (!emit_u00(c)) return false;
+      continue;
+    }
+    if (c == 0xc2 && i + 1 < input.size()) {
+      const auto next = static_cast<unsigned char>(input[i + 1]);
+      if (next >= 0x80 && next <= 0x9f) {
+        if (!emit_u00(next)) return false;
+        ++i;
+        continue;
+      }
+    }
     if ((c == '\\' || c == '\"') && !put('\\')) return false;
-    if (!put(c)) return false;
+    if (!put(static_cast<char>(c))) return false;
   }
   return true;
 }
@@ -138,13 +207,12 @@ bool escape_doublequote_full_to(std::string_view input, Put&& put) {
   return true;
 }
 
-// Convert iso_datetime <-> Unix milliseconds (UTC, honoring tz_offset) via C++20 chrono.
-// Used by chrono deserialize/serialize support.
-std::chrono::milliseconds iso_datetime_to_unix_ms(const iso_datetime& dt);
-iso_datetime unix_ms_to_iso_datetime(std::chrono::milliseconds ms);
-// Render iso_datetime as YYYY-MM-DD<sep>HH:MM:SS[.mmm] (UTC, no timezone suffix) into buf and
-// return the length. Datetimes are bounded, so char buf[40] is enough and no std::string is needed.
-// sep is '_' by default or 'T' for strict ISO-looking output.
+// Convert to/from an absolute instant at nanosecond precision. Missing timezone means
+// the system's local time; Z or an explicit numeric offset yields an unambiguous instant.
+std::optional<std::chrono::nanoseconds> iso_datetime_to_unix_ns(const iso_datetime& dt);
+iso_datetime unix_ns_to_iso_datetime(std::chrono::nanoseconds ns, bool utc = false);
+// Render YYYY-MM-DD<sep>HH:MM:SS[.fraction][Z|+HH:MM|-HH:MM].
+// char buf[48] is enough; sep is '_' by default or 'T'.
 size_t format_iso_datetime(const iso_datetime& dt, char* buf, size_t cap, char sep = '_');
 
 }

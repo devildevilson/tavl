@@ -26,6 +26,7 @@ struct assoc { std::map<std::string, int> m; std::set<int> s; };
 struct opt  { std::optional<int> a; std::optional<int> b; std::unique_ptr<int> c; };
 struct buf  { std::array<char, 8> name; };   // avoid char[8]: reflect would count it as 8 fields
 struct data { int a; int b; std::array<int, 3> c; };
+struct vector_field { std::vector<int> a; };
 }
 
 TEST_CASE("deserialize: named fields of primitives") {
@@ -37,6 +38,29 @@ TEST_CASE("deserialize: named fields of primitives") {
   CHECK(v.b == 0);
 }
 
+TEST_CASE("deserialize: quoted field names use their decoded spelling") {
+  tavl::parser p;
+  p.add_default_operator();
+  const auto value = tavl_test::deserialize_all<rgb>(p,
+      "\"r\" = 255\n'g' = 128\n\"b\" = 0");
+  CHECK(value.r == 255);
+  CHECK(value.g == 128);
+  CHECK(value.b == 0);
+}
+
+TEST_CASE("deserialize: quoted and bare spellings of a field are duplicates") {
+  tavl::parser p;
+  p.add_default_operator();
+  tavl::ct_context ctx;
+  const auto value = tavl_test::deserialize_all<rgb>(p,
+      "r=1\n\"r\"=2\ng=3\nb=4", ctx);
+  CHECK(value.r == 1);
+  bool duplicate = false;
+  for (const auto& d : ctx.diagnostics)
+    duplicate |= d.error.type == tavl::error_type::err_duplicate_field;
+  CHECK(duplicate);
+}
+
 TEST_CASE("deserialize: positional fill (values without names)") {
   tavl::parser p;
   p.add_default_operator();
@@ -44,6 +68,66 @@ TEST_CASE("deserialize: positional fill (values without names)") {
   CHECK(v.r == 255);
   CHECK(v.g == 128);
   CHECK(v.b == 0);
+}
+
+TEST_CASE("deserialize: a nontext row start fills a positional vector field") {
+  tavl::parser p;
+  p.add_default_operator();
+  CHECK(tavl_test::deserialize_all<vector_field>(p, "a=1 2").a == std::vector<int>{1, 2});
+  CHECK(tavl_test::deserialize_all<vector_field>(p, "1 2").a == std::vector<int>{1, 2});
+  CHECK(tavl_test::deserialize_streamed<vector_field>(p, "1 2", 1).a == std::vector<int>{1, 2});
+}
+
+TEST_CASE("deserialize: unknown text row is not positional") {
+  tavl::parser p;
+  p.add_default_operator();
+  const auto v = tavl_test::deserialize_all<vector_field>(p, "foo bar\na=3 4");
+  CHECK(v.a == std::vector<int>{3, 4});
+}
+
+TEST_CASE("deserialize: array rows are elements and token accepts any scalar") {
+  tavl::parser p;
+  p.add_default_operator();
+  struct nested { std::vector<std::vector<tavl::token>> a; };
+  const auto rows = tavl_test::deserialize_all<nested>(p, "a=[a = b c d]");
+  REQUIRE(rows.a.size() == 1);
+  REQUIRE(rows.a[0].size() == 5);
+  CHECK(p.content(rows.a[0][0].span) == "a");
+  CHECK(p.content(rows.a[0][1].span) == "=");
+  CHECK(p.content(rows.a[0][4].span) == "d");
+
+  struct flat { std::vector<tavl::token> a; };
+  const auto values = tavl_test::deserialize_all<flat>(p, "a=[a, =, b, c, d]");
+  REQUIRE(values.a.size() == 5);
+  CHECK(p.content(values.a[0].span) == "a");
+  CHECK(p.content(values.a[1].span) == "=");
+  CHECK(p.content(values.a[4].span) == "d");
+}
+
+TEST_CASE("deserialize: scalar array element cannot absorb a second token") {
+  tavl::parser p;
+  p.add_default_operator();
+  tavl::ct_context ctx;
+  const auto value = tavl_test::deserialize_all<vector_field>(p, "a=[1 2,3]", ctx);
+  CHECK(value.a == std::vector<int>{1, 3});
+  bool extra_value = false;
+  for (const auto& d : ctx.diagnostics)
+    extra_value |= d.error.type == tavl::error_type::err_too_many_values;
+  CHECK(extra_value);
+}
+
+TEST_CASE("deserialize: spaces and commas give different nested vector shapes") {
+  tavl::parser p;
+  p.add_default_operator();
+  struct spaced { std::vector<std::vector<std::vector<int>>> matrix; };
+  const auto a = tavl_test::deserialize_streamed<spaced>(p, "matrix=[[1 2],[3 4]]", 1);
+  REQUIRE(a.matrix.size() == 2);
+  CHECK(a.matrix[0] == std::vector<std::vector<int>>{{1, 2}});
+  CHECK(a.matrix[1] == std::vector<std::vector<int>>{{3, 4}});
+
+  struct comma { std::vector<std::vector<int>> matrix; };
+  const auto b = tavl_test::deserialize_all<comma>(p, "matrix=[[1,2],[3,4]]");
+  CHECK(b.matrix == std::vector<std::vector<int>>{{1, 2}, {3, 4}});
 }
 
 TEST_CASE("deserialize: containers (vector/array/pair/tuple)") {
@@ -311,6 +395,22 @@ TEST_CASE("streaming: release_consumed keeps the input buffer bounded") {
   CHECK(out[2].c == std::array<int, 3>{3, 4, 5});
   // Without release the buffer would grow to all ~54 bytes; with release it stays near one packet.
   CHECK(peak_buffer < 40);
+}
+
+TEST_CASE("streaming: stored tokens need source bytes before release_consumed") {
+  struct token_data { std::vector<tavl::token> a; };
+  tavl::parser p;
+  p.add_default_operator();
+  p.flush("a=[abc]\n");
+  p.finish();
+  tavl::ct_context ctx;
+  token_data out;
+  tavl::deserialize(p, ctx, out);
+  REQUIRE(out.a.size() == 1);
+  CHECK(p.content(out.a[0].span) == "abc");
+  tavl::release_consumed(p, ctx);
+  CHECK(p.content(out.a[0].span).empty());
+  CHECK(out.a[0].span.size == 3); // the span survives; only its source text is gone
 }
 
 TEST_CASE("single/list classification via parser::peek (doesn't consume the stream)") {

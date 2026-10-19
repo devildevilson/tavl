@@ -79,6 +79,14 @@
   X(warn_missing_field) \
   /* critical */ \
   X(err_bracket_missmatch) \
+  X(err_unterminated_string) \
+  X(err_unterminated_block_comment) \
+  X(err_invalid_escape) \
+  X(err_invalid_utf8) \
+  X(err_forbidden_nul) \
+  X(err_forbidden_control) \
+  X(err_missing_value) \
+  X(err_expected_identifier) \
   X(err_misplaced_operator) \
   X(err_nesting_too_deep) \
   X(err_row_too_long) \
@@ -86,7 +94,11 @@
   X(err_expect_token_boolean) \
   X(err_expect_token_number_uint) \
   X(err_expect_token_number_int) \
+  X(err_number_out_of_range) \
   X(err_expect_token_number_float) \
+  X(err_float_out_of_range) \
+  X(err_datetime_precision_loss) \
+  X(err_datetime_out_of_range) \
   /* deserialize */ \
   X(err_duplicate_field) \
   X(err_too_many_values) \
@@ -165,9 +177,11 @@ struct source_span {
 struct token {
   enum token_type type = token_type::invalid;
   source_span span;
+  bool terminated = true;  // false for a quoted string or block comment cut off by EOF
+  bool float_out_of_range = false;  // valid decimal spelling outside the binary64 range
 
   inline bool exists() const noexcept { return type != token_type::invalid; }
-  inline bool valid() const noexcept { return exists() && type != token_type::unrecognized; }
+  inline bool valid() const noexcept { return exists() && type != token_type::unrecognized && terminated; }
 };
 
 struct event {
@@ -184,10 +198,11 @@ struct error {
   inline bool is_critical() const noexcept { return type >= error_type::err_bracket_missmatch; }
 };
 
-// Calendar token payload, converted to/from Unix milliseconds by detail helpers.
+// Calendar token payload with nanosecond fractional precision.
 struct iso_datetime {
-  int32_t y=0, m=0, d=0, hh=0, mm=0, ss=0, ms=0, tz_offset_mm=0;
+  int32_t y=0, m=0, d=0, hh=0, mm=0, ss=0, ns=0, tz_offset_mm=0;
   bool is_utc = false;
+  bool has_timezone = false;
 };
 
 // Operator fixity used by make_math_ast.

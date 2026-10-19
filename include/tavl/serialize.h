@@ -10,6 +10,8 @@
 #include <tuple>
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <type_traits>
 
 #include <reflect>
@@ -24,8 +26,8 @@
 //   named aggregate -> { field = val }   unnamed aggregate (past the depth threshold) -> ( val, val )
 //   pair/tuple -> ( … )    vector/list/deque/std::array/set -> [ … ]    map -> { k = v }
 //   root aggregate -> bare rows without brackets (the file's implicit global tuple).
-// Primitives: bool->true/false; integral/floating -> std::vformat using the options' format string
-//   (empty -> to_chars, shortest round-trip); std::string/char[N]/array<char,N>/const char* ->
+// Primitives: bool->true/false; integral -> std::format (empty format -> to_chars);
+//   floating -> canonical binary64 (custom float_fmt -> std::format); std::string/char[N]/array<char,N>/const char* ->
 //   identifier without quotes if safe, otherwise "…" with escaping; optional/unique_ptr -> null or the value.
 //
 // Options - the sopts struct, passed WHOLE as a non-type template parameter
@@ -61,7 +63,7 @@ struct ser_str {
 
 struct sopts {
   ser_str<> int_fmt   = "{}";       // integer format (std::format spec); empty -> to_chars
-  ser_str<> float_fmt = "{}";       // float format; empty -> to_chars (shortest round-trip)
+  ser_str<> float_fmt = "{}";       // "{}" or empty -> canonical binary64; custom format may lose precision
   bool serialize_cstr   = false;   // serialize std::string_view / const char* / char* (asymmetric)
   bool follow_pointers  = false;   // dereference raw pointers (ASYMMETRIC - not read back)
 
@@ -69,6 +71,7 @@ struct sopts {
   bool quote_all_strings = false;   // always wrap strings in "" with minimal escaping (otherwise - only when needed)
   bool full_escape = false;         // ALL strings -> "" with full escape (control chars + unicode \u/\U): pure ASCII for network transport
   bool iso_datetime = false;        // datetime: date/time separator - false -> '_' (format default), true -> 'T' (strict ISO)
+  bool utc_datetime = false;        // time_point: render UTC with Z instead of system local time
 
   ser_str<> indent = "  ";          // indent for one nesting level (only when prettify)
   size_t names_depth = SIZE_MAX;    // STRICTLY up to which depth (number of brackets) to write field names; 0 -> nowhere (not even at root), SIZE_MAX -> everywhere
@@ -117,13 +120,12 @@ template <auto Opts, class I> bool ser_int(I v, std::string& out) {
 }
 
 template <auto Opts> bool ser_float(double v, std::string& out) {
-  char buf[40];
-  const auto r = std::to_chars(buf, buf + sizeof(buf), v);
-  return ser_put<Opts>(out, std::string_view(buf, r.ptr));
+  return ser_put<Opts>(out, detail::format_float_canonical(v));
 }
 
 template <auto Opts>
 bool ser_string(std::string_view s, std::string& out) {
+  if (detail::invalid_utf8(s)) return false;
   if (!Opts.full_escape && !Opts.quote_all_strings && !ser_string_needs_quote(s))
     return ser_put<Opts>(out, s);   // unquoted valid identifier
 
@@ -226,16 +228,25 @@ bool serialize(const T& val, std::string& out, size_t depth) {
   }
   else if constexpr (std::is_floating_point_v<T>) {
     double fv = static_cast<double>(val);
-    if constexpr (Opts.float_fmt.empty()) return ser_float<Opts>(fv, out);
+    if constexpr (std::numeric_limits<T>::digits > std::numeric_limits<double>::digits ||
+                  std::numeric_limits<T>::max_exponent > std::numeric_limits<double>::max_exponent) {
+      if (std::isfinite(val) &&
+          (static_cast<T>(fv) != val || std::signbit(fv) != std::signbit(val)))
+        return false;
+    }
+    if constexpr (Opts.float_fmt.empty() || Opts.float_fmt.view() == "{}")
+      return ser_float<Opts>(fv, out);
     else return ser_put<Opts>(out, std::format(Opts.float_fmt.view(), fv));
   }
   else if constexpr (ds_is_time_point<T>::value || ds_is_duration<T>::value) {
     using namespace std::chrono;
-    milliseconds ms{};
-    if constexpr (ds_is_time_point<T>::value) ms = duration_cast<milliseconds>(val.time_since_epoch());
-    else                                      ms = duration_cast<milliseconds>(val);
-    char buf[40];   // datetime output is bounded; avoid std::string
-    const size_t n = detail::format_iso_datetime(detail::unix_ms_to_iso_datetime(ms), buf, sizeof(buf), Opts.iso_datetime ? 'T' : '_');
+    nanoseconds ns{};
+    if constexpr (ds_is_time_point<T>::value) ns = duration_cast<nanoseconds>(val.time_since_epoch());
+    else                                      ns = duration_cast<nanoseconds>(val);
+    const bool utc = ds_is_duration<T>::value || Opts.utc_datetime;
+    char buf[48];   // datetime output is bounded; avoid std::string
+    const size_t n = detail::format_iso_datetime(detail::unix_ns_to_iso_datetime(ns, utc),
+                                                 buf, sizeof(buf), Opts.iso_datetime ? 'T' : '_');
     return ser_put<Opts>(out, std::string_view(buf, n));
   }
   else if constexpr (std::is_same_v<T, std::string>) {

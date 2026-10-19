@@ -8,9 +8,11 @@
 #include <optional>
 
 #include "tavl/common.h"
+#include "tavl/detail.h"
 
 // lexer - the tokenizer for the tavl format. char_storage accumulates bytes (resolve/peek by
-// absolute offset, release_before frees what has been read). lexer::lex() yields one token at a time
+// absolute offset, release_before discards what has been read while retaining capacity).
+// lexer::lex() yields one token at a time
 // from storage and returns token_type::not_enought_data when there isn't enough data; after finish()
 // it tokenizes the trailing tail. Operators are registered with metadata (fixity/precedence):
 // symbolic via add_operator, literal via add_litteral_operator; operator_info returns the metadata
@@ -35,6 +37,7 @@ public:
   void clear();
 private:
   size_t offset = 0;
+  size_t begin = 0;  // released prefix retained until append needs to compact
   std::vector<char> storage;
 };
 
@@ -68,8 +71,10 @@ public:
   size_t token_offset() const noexcept;   // absolute offset of the current not-yet-emitted token
 
   std::optional<op_info> operator_info(const std::string_view& op, op_fixity fixity) const;
+  detail::float_parse_result parse_float(std::string_view text, double& value) const;
 private:
   lexer_state state;
+  mutable detail::float_parse_workspace float_workspace;
   std::vector<op_entry> operators;
   std::vector<op_entry> litteral_operators;
 

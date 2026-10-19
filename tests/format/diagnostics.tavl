@@ -1,0 +1,9 @@
+object = {value}
+missing_name = {=}
+missing_data = {a=}
+escape = "\q"
+range = 1e309
+empty = [1, ,2]
+duplicate = {a=1,a=2}
+]
+/* unfinished

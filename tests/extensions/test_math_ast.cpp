@@ -46,7 +46,10 @@ TEST_CASE("math_ast: malformed expressions report err_misplaced_operator") {
 
   for (const std::string_view src : {"a +", "= a", "a * * b", "a + (b *)", "f(a +)", "a ! b"}) {
     const auto result = tavl_test::build_ast_result(p, src, tavl::make_math_ast);
-    CHECK(result.error.type == tavl::error_type::err_misplaced_operator);
+    const auto expected = src == "= a" ? tavl::error_type::err_expected_identifier
+      : (src == "a +" || src == "a + (b *)" || src == "f(a +)")
+          ? tavl::error_type::err_missing_value : tavl::error_type::err_misplaced_operator;
+    CHECK(result.error.type == expected);
     CHECK(result.nodes.empty());
   }
 }
@@ -75,6 +78,7 @@ TEST_CASE("math_ast: custom postfix operator binds to one operand") {
   p.add_operator("!", tavl::op_fixity::postfix, 17);
 
   CHECK(math_ast(p, "a! + b") == "(pair '+' (pair '!' (tok 'a')) (tok 'b'))");
+  CHECK(math_ast(p, "a!") == "(pair '!' (tok 'a'))");
 }
 
 TEST_CASE("math_ast: call syntax uses an empty operator pair") {

@@ -33,7 +33,8 @@ TEST_CASE("tag_ast: malformed rows report err_misplaced_operator") {
 
   for (const std::string_view src : {"= value", "name =", "name = (value =)"}) {
     const auto result = tavl_test::build_ast_result(p, src, tavl::make_tag_ast);
-    CHECK(result.error.type == tavl::error_type::err_misplaced_operator);
+    CHECK(result.error.type == (src == "= value" ? tavl::error_type::err_expected_identifier
+                                                : tavl::error_type::err_missing_value));
     CHECK(result.nodes.empty());
   }
 }

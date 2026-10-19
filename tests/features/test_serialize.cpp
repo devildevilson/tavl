@@ -2,6 +2,10 @@
 
 #include <doctest/doctest.h>
 
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 #include <optional>
@@ -85,6 +89,102 @@ TEST_CASE("serialize: pretty (default)") {
         "  z = 3\n"
         "}\n"
         "nums = [4, 5, 6]");
+}
+
+TEST_CASE("serialize: rejects malformed UTF-8 string values") {
+  std::string out;
+  CHECK_FALSE(tavl::serialize<tavl::sopts{}>(std::string(1, char(0xFF)), out));
+  CHECK(out.empty());
+  CHECK(tavl::serialize<tavl::sopts{}>(std::string("\xD0\xBF"), out));
+}
+
+TEST_CASE("serialize: a string NUL is written as an explicit escape") {
+  std::string out;
+  CHECK(tavl::serialize<tavl::sopts{}>(std::string("a\0b", 3), out));
+  CHECK(out == R"("a\u0000b")");
+}
+
+TEST_CASE("serialize: forbidden controls are escaped by the default writer") {
+  const std::string value("\x01\x7f\xc2\x85", 4);
+  const std::string written = tavl_test::to_text(value);
+  CHECK(written == R"("\u0001\u007f\u0085")");
+  tavl::parser parser;
+  parser.add_default_operator();
+  CHECK(tavl_test::deserialize_all<std::string>(parser, written) == value);
+
+  const std::string allowed("a\t\n\r\f\vb", 7);
+  CHECK(tavl_test::to_text(allowed) == "\"a\t\n\r\f\vb\"");
+}
+
+TEST_CASE("serialize: canonical binary64 spelling preserves float identity") {
+  const auto render = [](double value) { return tavl_test::to_text(value); };
+  CHECK(render(1.0) == "1.0");
+  CHECK(render(-0.0) == "-0.0");
+  CHECK(render(0.5) == "0.5");
+  CHECK(render(1000.0) == "1e3");
+  CHECK(render(std::nextafter(1.0, 2.0)) == "1.0000000000000002");
+  CHECK(render(std::numeric_limits<double>::denorm_min()) == "5e-324");
+  CHECK(render(std::numeric_limits<double>::max()) == "1.7976931348623157e308");
+  CHECK(render(std::numeric_limits<double>::infinity()) == "inf");
+  CHECK(render(-std::numeric_limits<double>::infinity()) == "-inf");
+  CHECK(render(std::numeric_limits<double>::quiet_NaN()) == "nan");
+  for (const double special : {std::numeric_limits<double>::infinity(),
+                               -std::numeric_limits<double>::infinity(),
+                               std::numeric_limits<double>::quiet_NaN()}) {
+    const std::string written = render(special);
+    double parsed = 0;
+    REQUIRE(tavl::detail::is_float_number(written, parsed));
+    if (std::isnan(special)) CHECK(std::isnan(parsed));
+    else CHECK(std::bit_cast<uint64_t>(parsed) == std::bit_cast<uint64_t>(special));
+  }
+  CHECK(tavl_test::to_text<tavl::sopts{.float_fmt = ""}>(-0.0) == "-0.0");
+  CHECK(tavl_test::to_text<tavl::sopts{.float_fmt = "{:.2f}"}>(1.234) == "1.23");
+}
+
+TEST_CASE("serialize: canonical finite binary64 text round-trips through TAVL") {
+  uint64_t state = 0x87c3365fe6d2aa01ULL;
+  tavl::parser parser;
+  const auto check = [&](uint64_t bits) {
+    const double source = std::bit_cast<double>(bits);
+    const std::string text = tavl_test::to_text(source);
+    const auto events = tavl_test::poll_all(parser, text);
+    REQUIRE_FALSE(tavl_test::has_critical(events));
+    bool found = false;
+    for (const auto& item : events) {
+      if (item.event.type != tavl::event_type::got_token) continue;
+      found = true;
+      CHECK(item.event.token.type == tavl::token_type::number_float);
+      const auto restored = parser.to_float(item.event.token);
+      REQUIRE(restored.has_value());
+      CHECK(std::bit_cast<uint64_t>(*restored) == bits);
+    }
+    CHECK(found);
+    CHECK(tavl_test::to_text(source) == text);
+  };
+  check(0);
+  check(uint64_t{1} << 63);
+  check(1);
+  check(0x0010000000000000ULL);
+  check(0x3ff0000000000000ULL);
+  check(0x7fefffffffffffffULL);
+  for (int i = 0; i < 512; ++i) {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    check(state & 0xffefffffffffffffULL);
+  }
+}
+
+TEST_CASE("serialize: long double values outside binary64 are rejected") {
+  if constexpr (std::numeric_limits<long double>::digits >
+                std::numeric_limits<double>::digits) {
+    const long double extended = std::nextafter(1.0L, 2.0L);
+    std::string out;
+    CHECK_FALSE(tavl::serialize<tavl::sopts{}>(extended, out));
+    CHECK(out.empty());
+    CHECK(tavl::serialize<tavl::sopts{}>(1.5L, out));
+    CHECK(out == "1.5");
+  }
 }
 
 TEST_CASE("serialize: compact — root via \\n, nested ',' without space") {

@@ -52,8 +52,9 @@ struct block_frame {
   token identifier;
   token op;
   token last_value;
+  bool leading_binary_operator = false;
 
-  inline void new_row() { identifier = token(); op = token(); last_value = token(); }
+  inline void new_row() { identifier = token(); op = token(); last_value = token(); leading_binary_operator = false; }
   inline bool has_identifier() const { return identifier.exists(); }
   inline bool has_value() const { return last_value.exists(); }
   inline bool has_row() const { return has_identifier() || op.exists() || has_value(); }
@@ -69,6 +70,7 @@ struct parser {
   struct lexer lexer;
   std::vector<block_frame> stack;
   std::vector<pending_event> events;
+  size_t event_cursor = 0;
 
   size_t ignore_depth = 0;
   block_modes pending_modes;
@@ -83,7 +85,8 @@ struct parser {
 
   // --- releasing consumed input for streaming ---
   // Lower bound of still-needed bytes: lexer token, queued events, and delayed row id/operator.
-  // Does not account for deserialize-level lookahead; call tavl::release_consumed(p, ctx) there.
+  // Does not account for tokens kept by the caller or deserialize-level lookahead; call
+  // tavl::release_consumed(p, ctx) for the latter, and retain bytes for any caller-owned tokens.
   size_t consumed_offset() const;
   void release_before(size_t offset);   // after release, content() for discarded spans is empty
 
@@ -102,9 +105,13 @@ struct parser {
 
   void clear() noexcept;
 
+  // A token keeps only a span, not its text. content() works while its bytes remain in storage;
+  // release_before/release_consumed or clear() can end that lifetime. A view returned here may
+  // also be invalidated by the next flush() if the storage vector grows or compacts.
   std::string_view content(const source_span& span) const;
 
   std::string to_string(const token& t) const;
+  void to_string(const token& t, std::string& output) const;
   std::optional<bool> to_boolean(const token& t) const;
   std::optional<int64_t> to_int(const token& t) const;
   std::optional<uint64_t> to_uint(const token& t) const;

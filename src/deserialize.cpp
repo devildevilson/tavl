@@ -8,13 +8,14 @@ ct_scope::ct_scope(ct_context& c) noexcept : ctx(c) {
   if (ctx.depth == 0) {
     ctx.cursor = 0;
     ctx.stalled = false;
-    if (ctx.frames.empty()) { ctx.peeked.reset(); ctx.diagnostics.clear(); }
+    if (ctx.frames.empty()) { ctx.peeked.reset(); ctx.replayed.reset(); ctx.diagnostics.clear(); }
   }
   ctx.depth += 1;
 }
 ct_scope::~ct_scope() { ctx.depth -= 1; }
 
 event ct_peek(parser& p, ct_context& ctx) {
+  if (ctx.replayed) return *ctx.replayed;
   if (!ctx.peeked) {
     auto [ev, err] = p.poll_event();
     if (!err.no_error()) ctx.push_diagnostic(err);
@@ -24,6 +25,7 @@ event ct_peek(parser& p, ct_context& ctx) {
   return *ctx.peeked;
 }
 event ct_next(parser& p, ct_context& ctx) {
+  if (ctx.replayed) { const event e = *ctx.replayed; ctx.replayed.reset(); return e; }
   if (ctx.peeked) { const event e = *ctx.peeked; ctx.peeked.reset(); return e; }
   auto [ev, err] = p.poll_event();
   if (!err.no_error()) ctx.push_diagnostic(err);
