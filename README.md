@@ -176,8 +176,14 @@ range or precision loss where applicable.
 instance, call `tavl::release_consumed(parser, context)` to keep only input
 still needed by the parser and deserializer. Event consumers can use
 `parser::consumed_offset()` with `parser::release_before()` directly. A `//---`
-line is an ordinary comment; applications may recognize it with
-`is_document_separator()` and reset the parser between documents.
+comment is an application-level document separator. On its `got_comment`
+event, `is_document_separator()` recognizes it, while
+`finish_at_document_separator(parser, token)` saves any already-buffered bytes
+after the comment's LF and finalizes only the preceding document. Drain that
+parser to `eof`, call `clear()`, then `flush()` the returned bytes and continue
+feeding later chunks. An incomplete row in those bytes remains pending until
+more input or the final `finish()` call. Calling `finish()` directly at the
+separator would also parse buffered bytes from the next document.
 
 The optional AST builders are `make_pair_ast` (equal-rank right-associative
 pairs), `make_tag_ast` (tag-shaped rows), and `make_math_ast` (registered

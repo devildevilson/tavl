@@ -54,6 +54,21 @@ bool is_document_separator(const parser& p, const token& t) {
   return s == document_separator;
 }
 
+std::optional<std::string> finish_at_document_separator(parser& p, const token& t) {
+  if (!is_document_separator(p, t)) return std::nullopt;
+  if (t.span.offset > SIZE_MAX - t.span.size) return std::nullopt;
+  const size_t end = t.span.offset + t.span.size;
+  // The separator must be the last token polled. Otherwise earlier events or lexer state
+  // could already refer to bytes that would be removed from this document.
+  if (end != p.lexer.token_offset() || end > p.storage.size()) return std::nullopt;
+  const auto buffered = p.storage.resolve({end, SIZE_MAX});
+  const size_t newline = !buffered.empty() && buffered.front() == '\n' ? 1 : 0;
+  std::string remainder(buffered.substr(newline));
+  if (!p.storage.truncate_after(end)) return std::nullopt;
+  p.finish();
+  return remainder;
+}
+
 // A plain reverse would swap children inside pairs; rebuild the reversed RPN by subtrees.
 static void reverse_rpn(ast_context& ctx, std::vector<node>& ast_nodes) {
   ctx.support.insert(ctx.support.begin(), ctx.rpn_output.begin(), ctx.rpn_output.end());

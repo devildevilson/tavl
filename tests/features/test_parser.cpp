@@ -3,6 +3,8 @@
 #include <doctest/doctest.h>
 
 #include <vector>
+#include <string>
+#include <optional>
 
 #include "util.h"
 
@@ -169,4 +171,72 @@ TEST_CASE("document separator: //--- inside a string is not a separator") {
     if (ev.type == event_type::eof) break;
   }
   CHECK_FALSE(any_sep);   // string token, not a comment
+}
+
+TEST_CASE("document separator: buffered next document is not consumed by finish") {
+  struct input_case {
+    std::vector<std::string_view> chunks;
+    std::string_view buffered_tail;
+    std::string_view later;
+  };
+  for (const auto& input : {
+         input_case{{"a=b,c=v,123//---\na=c,c="}, "a=c,c=", "352,6463"},
+         input_case{{"a=b,c=v,123", "//---\na=c,c="}, "a=c,c=", "352,6463"},
+         input_case{{"a=b,c=v,123/", "/---\na=c,c="}, "a=c,c=", "352,6463"},
+         input_case{{"a=b,c=v,123", "//---\na=c,c=352,6463"},
+                    "a=c,c=352,6463", ""}}) {
+    tavl::parser p;
+    p.add_default_operator();
+    std::vector<std::string> before;
+    std::vector<std::string> after;
+    bool critical = false;
+    const auto record = [&](const tavl::event& ev, const tavl::error& err,
+                            std::vector<std::string>& output) {
+      critical |= err.is_critical();
+      if (ev.type == event_type::got_row_identifier || ev.type == event_type::got_token)
+        output.emplace_back(p.content(ev.token.span));
+    };
+
+    std::optional<std::string> remainder;
+    for (std::string_view chunk : input.chunks) {
+      p.flush(chunk);
+      for (;;) {
+        const auto [ev, err] = p.poll_event();
+        if (ev.type == event_type::not_enought_data) break;
+        record(ev, err, before);
+        if (ev.type == event_type::got_comment && tavl::is_document_separator(p, ev.token)) {
+          remainder = tavl::finish_at_document_separator(p, ev.token);
+          break;
+        }
+      }
+      if (remainder) break;
+    }
+    REQUIRE(remainder.has_value());
+    CHECK(*remainder == input.buffered_tail);
+    for (;;) {
+      const auto [ev, err] = p.poll_event();
+      record(ev, err, before);
+      if (ev.type == event_type::eof) break;
+    }
+    CHECK(before == std::vector<std::string>{"a", "b", "c", "v", "123"});
+    CHECK_FALSE(critical);
+
+    p.clear();
+    p.flush(*remainder);
+    for (;;) {
+      const auto [ev, err] = p.poll_event();
+      if (ev.type == event_type::not_enought_data) break;
+      record(ev, err, after);
+    }
+    CHECK_FALSE(critical); // an incomplete trailing row is not an EOF error yet
+    p.flush(input.later);
+    p.finish();
+    for (;;) {
+      const auto [ev, err] = p.poll_event();
+      record(ev, err, after);
+      if (ev.type == event_type::eof) break;
+    }
+    CHECK(after == std::vector<std::string>{"a", "c", "c", "352", "6463"});
+    CHECK_FALSE(critical);
+  }
 }

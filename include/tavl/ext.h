@@ -4,6 +4,8 @@
 #include <vector>
 #include <tuple>
 #include <span>
+#include <optional>
+#include <string>
 
 #include "tavl/common.h"
 #include "tavl/parser.h"
@@ -45,11 +47,15 @@ struct ast_context {
 
 std::tuple<event, error> ignore_to_row_end(parser& p);
 
-// Document separator in one stream: a line comment exactly equal to "//---". It is a comment, so it
-// cannot be confused with the same bytes inside a string and is harmless to parsers that ignore it.
-// On a separator, finish and drain the current document, clear the parser, then feed the next one.
+// Document separator in one stream: a line comment equal to "//---" after trailing whitespace
+// is trimmed. It cannot be confused with the same bytes inside a string.
+// Call finish_at_document_separator immediately after polling its got_comment event. It returns
+// already-buffered bytes after the separator comment and its LF and finalizes only the preceding
+// document.
+// Drain to eof, clear the parser, then flush the returned bytes and continue with later chunks.
 inline constexpr std::string_view document_separator = "//---";
 bool is_document_separator(const parser& p, const token& t);
+std::optional<std::string> finish_at_document_separator(parser& p, const token& t);
 
 std::tuple<event, error> make_pair_ast(parser& p, ast_context& ctx, std::vector<node>& ast_nodes);
 std::tuple<event, error> make_tag_ast(parser& p, ast_context& ctx, std::vector<node>& ast_nodes);

@@ -56,6 +56,12 @@ void char_storage::release_before(const size_t offset) {
   }
 }
 
+bool char_storage::truncate_after(size_t absolute_offset) {
+  if (absolute_offset < offset || absolute_offset > size()) return false;
+  storage.resize(begin + absolute_offset - offset);
+  return true;
+}
+
 void char_storage::clear() {
   storage.clear();
   offset = 0;

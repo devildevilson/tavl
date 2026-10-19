@@ -32,6 +32,7 @@ public:
 
   span append(const std::string_view& data);
   void release_before(const size_t offset);
+  bool truncate_after(size_t absolute_offset); // keep bytes before this absolute offset
   size_t buffer_size() const;   // live bytes after release_before
 
   void clear();
